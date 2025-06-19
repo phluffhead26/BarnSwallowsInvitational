@@ -180,10 +180,20 @@ def get_draft_order():
     """Retrieves the official draft order from the 'Draft Order' worksheet."""
     try:
         order_ws = spreadsheet.worksheet("Draft Order")
-        return [cell for cell in order_ws.col_values(1) if cell] # Get all non-empty cells in the first column
+        # get_all_records() assumes the first row is a header. This is robust.
+        records = order_ws.get_all_records()
+        # Check if the 'Player' column exists
+        if not records or 'Player' not in records[0]:
+            st.error("The 'Draft Order' worksheet must have a column with the header 'Player'. Please fix the sheet.")
+            st.stop()
+        return [row['Player'] for row in records if row.get('Player')]
     except gspread.exceptions.WorksheetNotFound:
-        st.error("A 'Draft Order' worksheet is required. Please create one with player names in the first column.")
+        st.error("A 'Draft Order' worksheet is required. Please create one with a 'Player' column in the header.")
         st.stop()
+    except KeyError:
+        st.error("The 'Draft Order' worksheet must have a column with the header 'Player'.")
+        st.stop()
+
 
 def next_pick_player(order, total_picks):
     """Determines whose turn it is in a snake draft."""
@@ -337,4 +347,3 @@ with tab3:
         st.info("The 'Scores' worksheet has not been created yet. Score a show to begin.")
     except Exception as e:
         st.error(f"An error occurred while calculating standings: {e}")
-
