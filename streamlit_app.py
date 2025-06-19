@@ -2,14 +2,19 @@ import streamlit as st
 import requests
 import pandas as pd
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 import math
 import datetime
 
-# ── Must be first ──
+# -----------------------------------------------------------------------------
+# PAGE CONFIGURATION (must be the first Streamlit command)
+# -----------------------------------------------------------------------------
 st.set_page_config(page_title="Barnswallow Invitational", layout="wide")
 
-# ── Background & overlay ──
+# -----------------------------------------------------------------------------
+# STYLING
+# -----------------------------------------------------------------------------
+# Background image and overlay to improve readability
 bg_url = "https://i.imgur.com/eBrepb7.png"
 st.markdown(f"""
 <style>
@@ -20,60 +25,98 @@ st.markdown(f"""
   background-position: center center;
   background-attachment: fixed;
 }}
+/* Overlay to make text more readable on the background image */
 .stApp::before {{
   content: "";
-  background: rgba(255,255,255,0.85);
-  position: absolute; top:0; left:0;
-  width:100%; height:100%; z-index:0;
+  background: rgba(255, 255, 255, 0.85);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
 }}
-main > div {{ position: relative; z-index:1; }}
+/* Ensure content is layered on top of the overlay */
+main > div {{
+  position: relative;
+  z-index: 1;
+}}
+/* Style for dataframes to give them a slight background */
 [data-testid="stDataFrameContainer"], [data-testid="stTable"] {{
-  background-color: rgba(255,255,255,0.95) !important;
+  background-color: rgba(255, 255, 255, 0.95) !important;
   border-radius: 8px;
   padding: 8px;
 }}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Alias map (lowercase keys) ──
+# -----------------------------------------------------------------------------
+# CONSTANTS & CONFIGURATION
+# -----------------------------------------------------------------------------
+PHISH_NET_BASE = "https://api.phish.net/v5"
+PHISH_IN_BASE = "https://phish.in/api/v2"
+PHISH_API_KEY = st.secrets["PHISHNET_API_KEY"]
+SPREADSHEET_ID = "13sQpCnwwxJ9KzD2ONtPS4Y2xKPLBVrxwF8E3yxnI0l8"
+TOUR_START_DATE = datetime.date(2025, 6, 19) # Official start date of the tour
+
+# Alias map to normalize song titles (keys should be lowercase)
 ALIAS_MAP = {
-    # ... your full alias map ...
     "2001": "also sprach zarathustra",
-    # etc.
     "yem": "you enjoy myself",
+    # Add other aliases here
 }
 
-# ── API & Google Sheets setup ──
-PHISH_NET_BASE = "https://api.phish.net/v5"
-PHISH_IN_BASE  = "https://phish.in/api/v2"
-PHISH_API_KEY  = st.secrets["PHISHNET_API_KEY"]
+# -----------------------------------------------------------------------------
+# GOOGLE SHEETS AUTHENTICATION & SETUP
+# -----------------------------------------------------------------------------
+@st.cache_resource
+def authorize_gspread():
+    """Authorizes gspread using Streamlit's secrets."""
+    scope = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds_info = st.secrets["GSPREAD_SERVICE_ACCOUNT"]
+    creds = Credentials.from_service_account_info(creds_info, scopes=scope)
+    return gspread.authorize(creds)
 
-creds_info     = st.secrets["GSPREAD_SERVICE_ACCOUNT"]
-scope          = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
-creds          = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
-gc             = gspread.authorize(creds)
-SPREADSHEET_ID = "13sQpCnwwxJ9KzD2ONtPS4Y2xKPLBVrxwF8E3yxnI0l8"
-spreadsheet    = gc.open_by_key(SPREADSHEET_ID)
-
-# ── Ensure Draft worksheet & header ──
-HEADER_ROW = ["Player"] + [f"Pick {i}" for i in range(1,13)]
 try:
-    draft_ws = spreadsheet.worksheet("Draft")
-    if draft_ws.row_values(1) != HEADER_ROW:
-        draft_ws.clear()
-        draft_ws.append_row(HEADER_ROW)
-except gspread.exceptions.WorksheetNotFound:
-    draft_ws = spreadsheet.add_worksheet("Draft", rows=100, cols=len(HEADER_ROW))
-    draft_ws.append_row(HEADER_ROW)
+    gc = authorize_gspread()
+    spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+except Exception as e:
+    st.error(f"Error connecting to Google Sheets. Please ensure your GSPREAD_SERVICE_ACCOUNT secrets are configured correctly. Details: {e}")
+    st.stop()
 
-# ── Core helpers ──
+# -----------------------------------------------------------------------------
+# WORKSHEET INITIALIZATION
+# -----------------------------------------------------------------------------
+HEADER_ROW = ["Player"] + [f"Pick {i}" for i in range(1, 13)]
+
+def get_or_create_worksheet(name, header):
+    """Gets a worksheet by name, creating it with a header if it doesn't exist."""
+    try:
+        ws = spreadsheet.worksheet(name)
+        if ws.row_values(1) != header:
+             ws.clear()
+             ws.append_row(header)
+        return ws
+    except gspread.exceptions.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(name, rows=100, cols=len(header))
+        ws.append_row(header)
+        return ws
+
+draft_ws = get_or_create_worksheet("Draft", HEADER_ROW)
+
+# -----------------------------------------------------------------------------
+# CORE HELPER FUNCTIONS
+# -----------------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_catalog():
-    resp = requests.get(f"{PHISH_NET_BASE}/songs.json", params={"apikey":PHISH_API_KEY})
-    data = resp.json().get("data", [])
+    """Fetches the full song catalog from Phish.net."""
+    params = {"apikey": PHISH_API_KEY}
+    response = requests.get(f"{PHISH_NET_BASE}/songs.json", params=params)
+    response.raise_for_status()
+    data = response.json().get("data", [])
     rows = []
     for s in data:
         song = s["song"]
@@ -81,178 +124,217 @@ def fetch_catalog():
             continue
         rows.append({
             "Song": song,
-            "Times Played": s.get("times_played", s.get("plays",0)),
-            "Debut Date": s.get("debut",""),
-            "Shows Since Last Played": s.get("gap",""),
-            "Last Played": s.get("last_played","")
+            "Times Played": s.get("times_played", s.get("plays", 0)),
+            "Debut Date": s.get("debut", ""),
+            "Shows Since Last Played": s.get("gap", ""),
+            "Last Played": s.get("last_played", "")
         })
     return pd.DataFrame(rows).sort_values("Song")
 
 def get_draft_df():
+    """Fetches the current draft board from the 'Draft' worksheet."""
     vals = draft_ws.get_all_values()
     if len(vals) <= 1:
         return pd.DataFrame([], columns=HEADER_ROW)
     return pd.DataFrame(vals[1:], columns=vals[0])
 
 def write_pick(player, song):
-    norm = ALIAS_MAP.get(song.strip().lower(), song)
-    df = get_draft_df()
-    for i, rec in enumerate(df.itertuples(), start=2):
-        if rec.Player == player:
-            for c in range(2, len(HEADER_ROW)+1):
-                if not draft_ws.cell(i, c).value:
-                    draft_ws.update_cell(i, c, norm)
-                    return True
-    return False
+    """Writes a new pick to the draft board for the specified player."""
+    normalized_song = ALIAS_MAP.get(song.strip().lower(), song)
+    try:
+        cell = draft_ws.find(player)
+        row_num = cell.row
+        row_values = draft_ws.row_values(row_num)
+        col_num = len(row_values) + 1
+        
+        if col_num > len(HEADER_ROW):
+             return False # No slots left
 
-# ── Draft order helpers ──
-def count_picks():
-    arr = get_draft_df().iloc[:,1:].values
-    return sum(1 for row in arr for cell in row if isinstance(cell, str) and cell.strip())
-
-def next_pick_player(order, total):
-    n   = len(order)
-    up  = total + 1
-    rnd = math.ceil(up / n)
-    pos = (up - 1) % n
-    idx = (n - 1 - pos) if rnd % 2 == 0 else pos
-    return order[idx], up
-
-order_ws      = spreadsheet.worksheet("Draft Order")
-initial_order = pd.DataFrame(order_ws.get_all_records())["Player"].tolist()
-if not initial_order:
-    st.error("❌ Please populate the Draft Order sheet first.")
-    st.stop()
-
-total_picks       = count_picks()
-pick_on, pick_num = next_pick_player(initial_order, total_picks)
-
-# ── Scoring via Phish.in v2 ──
-def score_show(show_date, return_breakdown=False):
-    r = requests.get(f"{PHISH_IN_BASE}/shows/{show_date}")
-    if r.status_code != 200:
-        st.error(f"No Phish.in data for {show_date}")
-        return ({}, {}) if return_breakdown else {}
-    payload = r.json()
-    tracks  = payload.get("tracks", [])
-
-    seen, info = set(), []
-    for t in tracks:
-        title = t["title"].strip()
-        key   = ALIAS_MAP.get(title.lower(), title).lower()
-        if key in seen: 
-            continue
-        seen.add(key)
-        dur_min = t.get("duration", 0) / 1000.0 / 60.0
-        is_bust = any(tag.get("name","").lower()=="bustout" for tag in t.get("tags", []))
-        info.append((key, dur_min, is_bust))
-
-    pts_map = {}
-    for key, dmin, bust in info:
-        pts = 4
-        if 20 <= dmin < 30:
-            pts += 2
-        elif 30 <= dmin < 40:
-            pts += 3
-        if bust:
-            pts += 10
-        pts_map[key] = pts
-
-    board     = get_draft_df()
-    totals    = {p:0 for p in initial_order}
-    breakdown = {}
-    for _, row in board.iterrows():
-        p = row["Player"]
-        breakdown[p] = {}
-        for pick in row[1:]:
-            if isinstance(pick, str) and pick.strip():
-                kk  = ALIAS_MAP.get(pick.lower(), pick.lower())
-                val = pts_map.get(kk, 0)
-                totals[p] += val
-                breakdown[p][pick] = val
-
-    return (breakdown, totals) if return_breakdown else totals
+        draft_ws.update_cell(row_num, col_num, normalized_song)
+        return True
+    except gspread.exceptions.CellNotFound:
+        st.error(f"Player '{player}' not found on the draft board.")
+        return False
 
 def append_scores(date, scores):
+    """Appends scores for a given date to the 'Scores' worksheet."""
     try:
         ws = spreadsheet.worksheet("Scores")
     except gspread.exceptions.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet("Scores", rows=len(initial_order)+10, cols=4)
-        ws.append_row(["Show Date","Player","Points","Cumulative"])
+        ws = spreadsheet.add_worksheet("Scores", rows=100, cols=3)
+        ws.append_row(["Show Date", "Player", "Points"])
 
-    # read existing & build seen set
-    rows = ws.get_all_values()[1:]
-    seen = set((r[0], r[1]) for r in rows)
-    cum  = {r[1]: int(r[3]) for r in rows if len(r)>=4}
+    rows_to_add = []
+    for player, points in scores.items():
+        rows_to_add.append([date, player, points])
+    
+    if rows_to_add:
+        ws.append_rows(rows_to_add)
 
-    for p in initial_order:
-        if (date, p) in seen:
-            continue
-        pts  = scores.get(p, 0)
-        prev = cum.get(p, 0)
-        ws.append_row([date, p, pts, prev+pts])
 
-# ── UI Tabs ──
-tab1, tab2, tab3 = st.tabs(["🏟️ Draft","🎯 Score a Show","🏆 Standings"])
+# -----------------------------------------------------------------------------
+# DRAFT ORDER & SCORING LOGIC
+# -----------------------------------------------------------------------------
+@st.cache_data(ttl=600) # Cache draft order for 10 minutes
+def get_draft_order():
+    """Retrieves the official draft order from the 'Draft Order' worksheet."""
+    try:
+        order_ws = spreadsheet.worksheet("Draft Order")
+        return [cell for cell in order_ws.col_values(1) if cell] # Get all non-empty cells in the first column
+    except gspread.exceptions.WorksheetNotFound:
+        st.error("A 'Draft Order' worksheet is required. Please create one with player names in the first column.")
+        st.stop()
+
+def next_pick_player(order, total_picks):
+    """Determines whose turn it is in a snake draft."""
+    n = len(order)
+    if n == 0: return "N/A", 0
+    
+    pick_number = total_picks + 1
+    round_number = math.ceil(pick_number / n)
+    position_in_round = (pick_number - 1) % n
+    
+    if round_number % 2 == 0: # Even rounds are reversed
+        player_index = n - 1 - position_in_round
+    else: # Odd rounds are normal order
+        player_index = position_in_round
+        
+    return order[player_index], pick_number
+
+def score_show(show_date, return_breakdown=False):
+    """Scores a show based on Phish.in data and the current draft board."""
+    try:
+        r = requests.get(f"{PHISH_IN_BASE}/shows/{show_date}")
+        r.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Could not retrieve data from Phish.in for {show_date}. Error: {e}")
+        return ({}, {}) if return_breakdown else {}
+
+    payload = r.json()
+    tracks = payload.get("data", {}).get("tracks", [])
+
+    played_song_points = {}
+    for t in tracks:
+        title = t["title"].strip()
+        key = ALIAS_MAP.get(title.lower(), title).lower()
+        
+        pts = 4 # Base points
+        dur_min = t.get("duration", 0) / 1000.0 / 60.0
+        if 20 <= dur_min < 30: pts += 2
+        elif dur_min >= 30: pts += 3
+        # is_bust logic can be added here if available in API
+        
+        played_song_points[key] = pts
+
+    board = get_draft_df()
+    player_totals = {p: 0 for p in board["Player"]}
+    player_breakdown = {p: {} for p in board["Player"]}
+
+    for _, row in board.iterrows():
+        player_name = row["Player"]
+        for pick in row[1:]:
+            if isinstance(pick, str) and pick.strip():
+                pick_key = ALIAS_MAP.get(pick.lower(), pick.lower())
+                points_for_pick = played_song_points.get(pick_key, 0)
+                if points_for_pick > 0:
+                    player_totals[player_name] += points_for_pick
+                    player_breakdown[player_name][pick] = points_for_pick
+    
+    return (player_breakdown, player_totals) if return_breakdown else player_totals
+
+# --- Initial Data Load ---
+initial_order = get_draft_order()
+draft_df = get_draft_df()
+total_picks = sum(draft_df.iloc[:, 1:].ne("").sum())
+pick_on, pick_num = next_pick_player(initial_order, total_picks)
+
+# -----------------------------------------------------------------------------
+# STREAMLIT UI
+# -----------------------------------------------------------------------------
+st.title("Barnswallow Invitational")
+
+tab1, tab2, tab3 = st.tabs(["🏟️ Draft", "🎯 Score a Show", "🏆 Standings"])
 
 with tab1:
     st.header("Draft & Catalog")
-    st.info(f"⏰ Pick {pick_num} on the clock: **{pick_on}**")
-    players = get_draft_df()["Player"].tolist() or initial_order
-    player  = st.selectbox("Who are you?", players)
-    choice  = st.selectbox("Pick a song:", fetch_catalog()["Song"])
-    if st.button("🏷️ Draft this song"):
-        ok = write_pick(player, choice)
-        st.success("✅ Drafted!") if ok else st.error("❌ No slots left.")
+    st.info(f"⏰ Pick #{pick_num}: **{pick_on}** is on the clock!")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Make Your Pick")
+        players = initial_order
+        player = st.selectbox("Who are you?", players, key="draft_player")
+        choice = st.selectbox("Pick a song:", fetch_catalog()["Song"], key="draft_song")
+        if st.button("🏷️ Draft This Song"):
+            if player == pick_on:
+                if write_pick(player, choice):
+                    st.success(f"✅ {player} drafted {choice}!")
+                    st.rerun()
+                else:
+                    st.error("❌ You have no open draft slots left.")
+            else:
+                st.warning(f"It's not your turn! Waiting for {pick_on}.")
+    
     st.subheader("Current Draft Board")
     st.dataframe(get_draft_df(), use_container_width=True)
-    st.subheader("Phish Catalog")
-    st.dataframe(fetch_catalog(), use_container_width=True)
+    
+    with st.expander("Full Song Catalog"):
+        st.dataframe(fetch_catalog(), use_container_width=True)
 
 with tab2:
     st.header("Score a Show")
-    today     = datetime.date.today().isoformat()
-    show_date = st.text_input("Show date (YYYY-MM-DD):", today)
-    if st.button("🏆 Compute Scores"):
-        bd, tot = score_show(show_date, True)
-        append_scores(show_date, tot)
-        st.subheader("Totals")
-        st.table(pd.DataFrame.from_dict(tot, orient="index", columns=["Points"]))
-        st.subheader("Pick-by-Pick Breakdown")
-        st.dataframe(pd.DataFrame.from_dict(bd, orient="index").fillna(0).astype(int))
+    today = datetime.date.today()
+    show_date = st.date_input("Select a show date to score", today)
+    if st.button("Calculate Scores"):
+        date_str = show_date.strftime("%Y-%m-%d")
+        breakdown, totals = score_show(date_str, return_breakdown=True)
+        append_scores(date_str, totals)
+        
+        st.subheader(f"Scores for {date_str}")
+        scores_df = pd.DataFrame.from_dict(totals, orient='index', columns=['Points'])
+        scores_df = scores_df.sort_values('Points', ascending=False)
+        st.dataframe(scores_df)
+
+        st.subheader("Scoring Breakdown")
+        if not any(v for v in breakdown.values() if v):
+            st.write("No drafted songs were played in this show.")
+        else:
+            for player, songs in breakdown.items():
+                if songs:
+                    st.write(f"**{player}**")
+                    for song, points in songs.items():
+                        st.write(f"- {song}: {points} pts")
+
 
 with tab3:
-    st.header("League Standings")
+    st.header("🏆 Overall Standings")
+    
     try:
-        ws_vals = spreadsheet.worksheet("Scores").get_all_values()
-        if len(ws_vals) <= 1:
-            st.info("No scores recorded yet.")
+        scores_ws = spreadsheet.worksheet("Scores")
+        records = scores_ws.get_all_records()
+        
+        if not records or len(records) <= 1:
+            st.info("No shows have been scored yet.")
         else:
-            header = ws_vals[0]
-            data   = ws_vals[1:]
-            df     = pd.DataFrame(data, columns=header)
-            df["Points"] = df["Points"].astype(int)
+            scores_df = pd.DataFrame(records[1:], columns=records[0])
+            scores_df['Points'] = pd.to_numeric(scores_df['Points'])
+            scores_df['Show Date'] = pd.to_datetime(scores_df['Show Date']).dt.date
+            
+            # Filter for shows on or after the official tour start date
+            tour_scores_df = scores_df[scores_df['Show Date'] >= TOUR_START_DATE].copy()
 
-            # remove duplicate (Show Date,Player), keep last entry
-            df = df.drop_duplicates(subset=["Show Date","Player"], keep="last")
+            if tour_scores_df.empty:
+                st.info(f"No official tour shows have been scored yet (since {TOUR_START_DATE.strftime('%Y-%m-%d')}).")
+            else:
+                # Calculate the cumulative standings
+                standings = tour_scores_df.groupby('Player')['Points'].sum().sort_values(ascending=False).reset_index()
+                standings.index = standings.index + 1
+                
+                st.write(f"Standings for all shows since {TOUR_START_DATE.strftime('%Y-%m-%d')}")
+                st.dataframe(standings, use_container_width=True)
 
-            pivot = (
-                df
-                .pivot(index="Player", columns="Show Date", values="Points")
-                .fillna(0)
-                .astype(int)
-            )
-            totals = (
-                pivot
-                .sum(axis=1)
-                .sort_values(ascending=False)
-                .reset_index()
-                .rename(columns={0: "Total Points"})
-            )
-
-            st.subheader("Current Standings")
-            st.table(totals)
-            st.subheader("Show-by-Show Breakdown")
-            st.table(pivot)
     except gspread.exceptions.WorksheetNotFound:
-        st.info("Score a show to create the sheet.")
+        st.info("The 'Scores' worksheet has not been created yet. Score a show to begin.")
+    except Exception as e:
+        st.error(f"An error occurred while calculating standings: {e}")
+
