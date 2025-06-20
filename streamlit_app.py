@@ -265,37 +265,37 @@ def score_show(show_date, draft_board, return_breakdown=False):
 
     tracks = payload.get("tracks", [])
     
-    first_play_songs = set()
-    played_song_points = {}
-    teased_song_points = {}
+    # --- SCORING LOGIC REBUILT FOR ACCURACY ---
 
-    # First pass: Score plays, reprises, and identify teases from tags
-    for t in tracks:
-        # Score the played song
-        played_title = t["title"].strip()
+    # Step 1: Create a list of all possible scoring events from the show's data.
+    point_events = []
+    songs_played_this_show = set() # To track the first play of a song
+    for track in tracks:
+        # --- Event: Song Play / Reprise ---
+        played_title = track["title"].strip()
         played_key = ALIAS_MAP.get(played_title.lower(), played_title.lower())
         
-        # Check if it's the first time this song is played in this show
-        if played_key not in first_play_songs:
-            # It's the first play
+        if played_key not in songs_played_this_show:
+            # First time played: 4 base points + duration bonus
             pts = 4
-            dur_min = t.get("duration", 0) / 1000.0 / 60.0
+            dur_min = track.get("duration", 0) / 1000.0 / 60.0
             if 20 <= dur_min < 30: pts += 2
             elif dur_min >= 30: pts += 3
-            played_song_points[played_key] = played_song_points.get(played_key, 0) + pts
-            first_play_songs.add(played_key)
+            point_events.append({'key': played_key, 'points': pts, 'label': played_title})
+            songs_played_this_show.add(played_key)
         else:
-            # It's a reprise, award 2 points
-            played_song_points[played_key] = played_song_points.get(played_key, 0) + 2
-
-        # Score any teases mentioned in this track's tags
-        for tag in t.get("tags", []):
+            # Subsequent play is a reprise: 2 points
+            point_events.append({'key': played_key, 'points': 2, 'label': f"{played_title} (Reprise)"})
+        
+        # --- Event: Tease ---
+        # A tease is found in the track's "tags" array
+        for tag in track.get("tags", []):
             if tag.get("name", "").lower() == "tease" and tag.get("notes"):
                 teased_title = tag["notes"].strip()
                 teased_key = ALIAS_MAP.get(teased_title.lower(), teased_title.lower())
-                teased_song_points[teased_key] = teased_song_points.get(teased_key, 0) + 1
+                point_events.append({'key': teased_key, 'points': 1, 'label': f"{teased_title} (Tease)"})
 
-    # Final pass: Tally points for each player
+    # Step 2: Tally points for each player by checking their picks against the events.
     player_totals = {p: 0 for p in draft_board["Player"]}
     player_breakdown = {p: {} for p in draft_board["Player"]}
 
@@ -305,16 +305,11 @@ def score_show(show_date, draft_board, return_breakdown=False):
             if isinstance(pick, str) and pick.strip():
                 pick_key = ALIAS_MAP.get(pick.lower(), pick.lower())
                 
-                # Get points for plays/reprises
-                if pick_key in played_song_points:
-                    player_totals[player_name] += played_song_points[pick_key]
-                    player_breakdown[player_name][pick] = player_breakdown[player_name].get(pick, 0) + played_song_points[pick_key]
-                
-                # Get points for teases
-                if pick_key in teased_song_points:
-                    player_totals[player_name] += teased_song_points[pick_key]
-                    tease_label = f"{pick} (Tease)"
-                    player_breakdown[player_name][tease_label] = player_breakdown[player_name].get(tease_label, 0) + teased_song_points[pick_key]
+                # Check if this drafted pick matches any event that happened in the show
+                for event in point_events:
+                    if event['key'] == pick_key:
+                        player_totals[player_name] += event['points']
+                        player_breakdown[player_name][event['label']] = player_breakdown[player_name].get(event['label'], 0) + event['points']
 
     return (player_breakdown, player_totals) if return_breakdown else player_totals
 
