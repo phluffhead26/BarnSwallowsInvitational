@@ -167,6 +167,7 @@ def fetch_catalog():
         })
     return pd.DataFrame(rows).sort_values("Song")
 
+@st.cache_data(ttl=60) # Cache the draft board for 60 seconds to reduce API calls
 def get_draft_df():
     """Fetches the current draft board from the 'Draft' worksheet."""
     vals = draft_ws.get_all_values()
@@ -187,6 +188,8 @@ def write_pick(player, song):
              return False # No slots left
 
         draft_ws.update_cell(row_num, col_num, normalized_song)
+        # Clear the cache so the new pick shows up immediately for all users
+        get_draft_df.clear()
         return True
     except gspread.exceptions.CellNotFound:
         st.error(f"Player '{player}' not found on the draft board.")
@@ -216,9 +219,7 @@ def get_draft_order():
     """Retrieves the official draft order from the 'Draft Order' worksheet."""
     try:
         order_ws = spreadsheet.worksheet("Draft Order")
-        # get_all_records() assumes the first row is a header. This is robust.
         records = order_ws.get_all_records()
-        # Check if the 'Player' column exists
         if not records or 'Player' not in records[0]:
             st.error("The 'Draft Order' worksheet must have a column with the header 'Player'. Please fix the sheet.")
             st.stop()
@@ -247,7 +248,7 @@ def next_pick_player(order, total_picks):
         
     return order[player_index], pick_number
 
-def score_show(show_date, return_breakdown=False):
+def score_show(show_date, draft_board, return_breakdown=False):
     """Scores a show based on Phish.in data and the current draft board."""
     try:
         r = requests.get(f"{PHISH_IN_BASE}/shows/{show_date}")
@@ -260,52 +261,38 @@ def score_show(show_date, return_breakdown=False):
     tracks = payload.get("tracks", [])
     show_notes = payload.get("show_notes", "")
 
-    # Points for songs played
     played_song_points = {}
     for t in tracks:
         title = t["title"].strip()
         key = ALIAS_MAP.get(title.lower(), title).lower()
-        
-        pts = 4 # Base points
+        pts = 4
         dur_min = t.get("duration", 0) / 1000.0 / 60.0
         if 20 <= dur_min < 30: pts += 2
         elif dur_min >= 30: pts += 3
-        
-        # Reprise bonus points logic removed to treat songs like "Tweezer Reprise" as distinct entities
-            
         played_song_points[key] = played_song_points.get(key, 0) + pts
 
-    # Points for teases
     teased_song_points = {}
     if show_notes:
-        board = get_draft_df()
-        all_drafted_songs = set(board.iloc[:, 1:].values.flatten())
-        
+        all_drafted_songs = set(draft_board.iloc[:, 1:].values.flatten())
         for song in all_drafted_songs:
             if pd.notna(song) and str(song).strip():
-                # Use regex to find whole word matches to avoid partial matches (e.g., "sand" in "sandwiches")
                 if re.search(r'\b' + re.escape(song) + r'\b', show_notes, re.IGNORECASE):
                     normalized_song = ALIAS_MAP.get(song.lower(), song.lower())
                     teased_song_points[normalized_song] = 1
 
-    # Combine all points
-    board = get_draft_df()
-    player_totals = {p: 0 for p in board["Player"]}
-    player_breakdown = {p: {} for p in board["Player"]}
+    player_totals = {p: 0 for p in draft_board["Player"]}
+    player_breakdown = {p: {} for p in draft_board["Player"]}
 
-    for _, row in board.iterrows():
+    for _, row in draft_board.iterrows():
         player_name = row["Player"]
         for pick in row[1:]:
             if isinstance(pick, str) and pick.strip():
                 pick_key = ALIAS_MAP.get(pick.lower(), pick.lower())
-                
-                # Add points for played songs
                 points_for_play = played_song_points.get(pick_key, 0)
                 if points_for_play > 0:
                     player_totals[player_name] += points_for_play
                     player_breakdown[player_name][pick] = player_breakdown[player_name].get(pick, 0) + points_for_play
                 
-                # Add points for teased songs
                 points_for_tease = teased_song_points.get(pick_key, 0)
                 if points_for_tease > 0:
                     player_totals[player_name] += points_for_tease
@@ -337,9 +324,8 @@ with tab1:
         players = initial_order
         player = st.selectbox("Who are you?", players, key="draft_player")
 
-        # Filter out drafted songs
         full_catalog_df = fetch_catalog()
-        drafted_songs_series = get_draft_df().iloc[:, 1:].values.flatten()
+        drafted_songs_series = draft_df.iloc[:, 1:].values.flatten()
         drafted_songs_set = {str(song).strip().lower() for song in drafted_songs_series if pd.notna(song) and str(song).strip()}
         
         full_catalog_df['normalized'] = full_catalog_df['Song'].apply(
@@ -360,7 +346,7 @@ with tab1:
                 st.warning(f"It's not your turn! Waiting for {pick_on}.")
     
     st.subheader("Current Draft Board")
-    st.dataframe(get_draft_df(), use_container_width=True)
+    st.dataframe(draft_df, use_container_width=True)
     
     with st.expander("Full Song Catalog"):
         st.dataframe(fetch_catalog(), use_container_width=True)
@@ -368,24 +354,21 @@ with tab1:
 with tab2:
     st.header("Score a Show")
     today = datetime.date.today()
-    # Set a wide date range to allow scoring of historical shows
     first_phish_show = datetime.date(1983, 12, 2)
     
-    # Use a key to ensure the state is handled correctly on reruns
     st.date_input(
         "Select a show date to score",
         value=today,
         min_value=first_phish_show,
         max_value=today,
-        key="score_date" # Added a unique key
+        key="score_date"
     )
 
     if st.button("Calculate Scores"):
-        # Use the key to access the correct value from the session state
         show_date = st.session_state.score_date
         date_str = show_date.strftime("%Y-%m-%d")
         
-        breakdown, totals = score_show(date_str, return_breakdown=True)
+        breakdown, totals = score_show(date_str, draft_df, return_breakdown=True)
         append_scores(date_str, totals)
         
         st.subheader(f"Scores for {date_str}")
@@ -418,13 +401,11 @@ with tab3:
             scores_df['Points'] = pd.to_numeric(scores_df['Points'])
             scores_df['Show Date'] = pd.to_datetime(scores_df['Show Date']).dt.date
             
-            # Filter for shows on or after the official tour start date
             tour_scores_df = scores_df[scores_df['Show Date'] >= TOUR_START_DATE].copy()
 
             if tour_scores_df.empty:
                 st.info(f"No official tour shows have been scored yet (since {TOUR_START_DATE.strftime('%Y-%m-%d')}).")
             else:
-                # Calculate the cumulative standings
                 standings = tour_scores_df.groupby('Player')['Points'].sum().sort_values(ascending=False).reset_index()
                 standings.index = standings.index + 1
                 
