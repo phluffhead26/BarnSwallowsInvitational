@@ -265,35 +265,40 @@ def score_show(show_date, draft_board, return_breakdown=False):
 
     tracks = payload.get("tracks", [])
     
-    # --- SCORING LOGIC REBUILT FOR ACCURACY ---
+    # --- SCORING LOGIC REBUILT FOR ACCURACY AND DETAIL ---
 
     # Step 1: Create a list of all possible scoring events from the show's data.
     point_events = []
-    songs_played_this_show = set() # To track the first play of a song
+    songs_played_this_show = set() 
     for track in tracks:
         # --- Event: Song Play / Reprise ---
         played_title = track["title"].strip()
         played_key = ALIAS_MAP.get(played_title.lower(), played_title.lower())
         
+        # Build the detailed label for the event
+        duration_ms = track.get("duration", 0)
+        duration_min = round(duration_ms / 60000)
+        label = f"{played_title} ({duration_min} min)"
+
         if played_key not in songs_played_this_show:
-            # First time played: 4 base points + duration bonus
             pts = 4
-            dur_min = track.get("duration", 0) / 1000.0 / 60.0
-            if 20 <= dur_min < 30: pts += 2
-            elif dur_min >= 30: pts += 3
-            point_events.append({'key': played_key, 'points': pts, 'label': played_title})
+            if 20 <= duration_min < 30: pts += 2
+            elif duration_min >= 30: pts += 3
+            point_events.append({'key': played_key, 'points': pts, 'label': label})
             songs_played_this_show.add(played_key)
         else:
-            # Subsequent play is a reprise: 2 points
+            # Subsequent play is a reprise
             point_events.append({'key': played_key, 'points': 2, 'label': f"{played_title} (Reprise)"})
         
         # --- Event: Tease ---
-        # A tease is found in the track's "tags" array
         for tag in track.get("tags", []):
             if tag.get("name", "").lower() == "tease" and tag.get("notes"):
-                teased_title = tag["notes"].strip()
+                tease_note = tag["notes"].strip()
+                teased_title = tease_note.split(" by ")[0].strip()
                 teased_key = ALIAS_MAP.get(teased_title.lower(), teased_title.lower())
-                point_events.append({'key': teased_key, 'points': 1, 'label': f"{teased_title} (Tease)"})
+                # Add context to the tease label
+                tease_label = f"{teased_title} (Tease in {played_title})"
+                point_events.append({'key': teased_key, 'points': 1, 'label': tease_label})
 
     # Step 2: Tally points for each player by checking their picks against the events.
     player_totals = {p: 0 for p in draft_board["Player"]}
@@ -305,7 +310,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
             if isinstance(pick, str) and pick.strip():
                 pick_key = ALIAS_MAP.get(pick.lower(), pick.lower())
                 
-                # Check if this drafted pick matches any event that happened in the show
                 for event in point_events:
                     if event['key'] == pick_key:
                         player_totals[player_name] += event['points']
@@ -398,8 +402,8 @@ with tab2:
                 for player, songs in breakdown.items():
                     if songs:
                         st.write(f"**{player}**")
-                        for song, points in songs.items():
-                            st.write(f"- {song}: {points} pts")
+                        for song_label, points in songs.items():
+                            st.write(f"- {song_label}: {points} pts")
 
 
 with tab3:
