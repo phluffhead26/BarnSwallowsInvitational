@@ -257,37 +257,45 @@ def score_show(show_date, draft_board, return_breakdown=False):
         st.error(f"Could not retrieve data from Phish.in for {show_date}. Error: {e}")
         return ({}, {}) if return_breakdown else {}
 
-    # CORRECTED: The API response is the payload itself, not nested under "data"
     payload = r.json() 
 
-    # CORRECTED: Check for empty data from the API and inform the user
     if not isinstance(payload, dict) or not payload.get("tracks"):
         st.warning(f"No setlist data found on Phish.in for {show_date}. The API data is empty for this date.")
         return ({}, {}) if return_breakdown else {}
 
     tracks = payload.get("tracks", [])
-    # CORRECTED: Tease info is often in 'taper_notes' not 'show_notes'
-    show_notes = payload.get("taper_notes", "") 
-
+    
+    first_play_songs = set()
     played_song_points = {}
-    for t in tracks:
-        title = t["title"].strip()
-        key = ALIAS_MAP.get(title.lower(), title).lower()
-        pts = 4
-        dur_min = t.get("duration", 0) / 1000.0 / 60.0
-        if 20 <= dur_min < 30: pts += 2
-        elif dur_min >= 30: pts += 3
-        played_song_points[key] = played_song_points.get(key, 0) + pts
-
     teased_song_points = {}
-    if show_notes:
-        all_drafted_songs = set(draft_board.iloc[:, 1:].values.flatten())
-        for song in all_drafted_songs:
-            if pd.notna(song) and str(song).strip():
-                if re.search(r'\b' + re.escape(song) + r'\b', show_notes, re.IGNORECASE):
-                    normalized_song = ALIAS_MAP.get(song.lower(), song.lower())
-                    teased_song_points[normalized_song] = 1
 
+    # First pass: Score plays, reprises, and identify teases from tags
+    for t in tracks:
+        # Score the played song
+        played_title = t["title"].strip()
+        played_key = ALIAS_MAP.get(played_title.lower(), played_title.lower())
+        
+        # Check if it's the first time this song is played in this show
+        if played_key not in first_play_songs:
+            # It's the first play
+            pts = 4
+            dur_min = t.get("duration", 0) / 1000.0 / 60.0
+            if 20 <= dur_min < 30: pts += 2
+            elif dur_min >= 30: pts += 3
+            played_song_points[played_key] = played_song_points.get(played_key, 0) + pts
+            first_play_songs.add(played_key)
+        else:
+            # It's a reprise, award 2 points
+            played_song_points[played_key] = played_song_points.get(played_key, 0) + 2
+
+        # Score any teases mentioned in this track's tags
+        for tag in t.get("tags", []):
+            if tag.get("name", "").lower() == "tease" and tag.get("notes"):
+                teased_title = tag["notes"].strip()
+                teased_key = ALIAS_MAP.get(teased_title.lower(), teased_title.lower())
+                teased_song_points[teased_key] = teased_song_points.get(teased_key, 0) + 1
+
+    # Final pass: Tally points for each player
     player_totals = {p: 0 for p in draft_board["Player"]}
     player_breakdown = {p: {} for p in draft_board["Player"]}
 
@@ -296,15 +304,17 @@ def score_show(show_date, draft_board, return_breakdown=False):
         for pick in row[1:]:
             if isinstance(pick, str) and pick.strip():
                 pick_key = ALIAS_MAP.get(pick.lower(), pick.lower())
-                points_for_play = played_song_points.get(pick_key, 0)
-                if points_for_play > 0:
-                    player_totals[player_name] += points_for_play
-                    player_breakdown[player_name][pick] = player_breakdown[player_name].get(pick, 0) + points_for_play
                 
-                points_for_tease = teased_song_points.get(pick_key, 0)
-                if points_for_tease > 0:
-                    player_totals[player_name] += points_for_tease
-                    player_breakdown[player_name][f"{pick} (Tease)"] = player_breakdown[player_name].get(f"{pick} (Tease)", 0) + points_for_tease
+                # Get points for plays/reprises
+                if pick_key in played_song_points:
+                    player_totals[player_name] += played_song_points[pick_key]
+                    player_breakdown[player_name][pick] = player_breakdown[player_name].get(pick, 0) + played_song_points[pick_key]
+                
+                # Get points for teases
+                if pick_key in teased_song_points:
+                    player_totals[player_name] += teased_song_points[pick_key]
+                    tease_label = f"{pick} (Tease)"
+                    player_breakdown[player_name][tease_label] = player_breakdown[player_name].get(tease_label, 0) + teased_song_points[pick_key]
 
     return (player_breakdown, player_totals) if return_breakdown else player_totals
 
