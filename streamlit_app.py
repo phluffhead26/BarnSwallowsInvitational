@@ -47,6 +47,29 @@ main > div {{
   border-radius: 8px;
   padding: 8px;
 }}
+
+/* --- NEW STYLES FOR TEXT COLOR --- */
+
+/* Target all headers (h1, h2, h3) */
+h1, h2, h3 {{
+    color: black !important;
+}}
+
+/* Target all regular text and labels */
+p, label, .st-emotion-cache-16txtl3, .st-emotion-cache-1jicfl2 {{
+    color: black !important;
+}}
+
+/* Target the tab labels */
+.st-emotion-cache-13qjbs3, .st-emotion-cache-ltfnpr {{
+    color: black !important;
+}}
+
+/* Target the info box text for 'On the Clock' */
+.stAlert p {{
+    color: black !important;
+}}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -328,22 +351,4 @@ with tab3:
         else:
             scores_df = pd.DataFrame(records[1:], columns=records[0])
             scores_df['Points'] = pd.to_numeric(scores_df['Points'])
-            scores_df['Show Date'] = pd.to_datetime(scores_df['Show Date']).dt.date
-            
-            # Filter for shows on or after the official tour start date
-            tour_scores_df = scores_df[scores_df['Show Date'] >= TOUR_START_DATE].copy()
-
-            if tour_scores_df.empty:
-                st.info(f"No official tour shows have been scored yet (since {TOUR_START_DATE.strftime('%Y-%m-%d')}).")
-            else:
-                # Calculate the cumulative standings
-                standings = tour_scores_df.groupby('Player')['Points'].sum().sort_values(ascending=False).reset_index()
-                standings.index = standings.index + 1
-                
-                st.write(f"Standings for all shows since {TOUR_START_DATE.strftime('%Y-%m-%d')}")
-                st.dataframe(standings, use_container_width=True)
-
-    except gspread.exceptions.WorksheetNotFound:
-        st.info("The 'Scores' worksheet has not been created yet. Score a show to begin.")
-    except Exception as e:
-        st.error(f"An error occurred while calculating standings: {e}")
+            scores_df['Show Dat
