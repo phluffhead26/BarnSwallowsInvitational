@@ -14,17 +14,29 @@ st.set_page_config(page_title="Barnswallow Invitational", layout="wide")
 # -----------------------------------------------------------------------------
 # STYLING
 # -----------------------------------------------------------------------------
+# Define different background images for desktop and mobile
+desktop_bg_url = "https://i.imgur.com/eBrepb7.png"
+mobile_bg_url = "https://i.imgur.com/ZobK8r1.png" # A more vertically-friendly image
+
 # Background image and overlay to improve readability
-bg_url = "https://i.imgur.com/eBrepb7.png"
 st.markdown(f"""
 <style>
+/* Default (Desktop) Background */
 .stApp {{
-  background-image: url('{bg_url}');
+  background-image: url('{desktop_bg_url}');
   background-size: cover;
   background-repeat: no-repeat;
   background-position: center center;
   background-attachment: fixed;
 }}
+
+/* Mobile Background - applied only for screens 768px or less */
+@media (max-width: 768px) {{
+  .stApp {{
+    background-image: url('{mobile_bg_url}');
+  }}
+}}
+
 /* Overlay to make text more readable on the background image */
 .stApp::before {{
   content: "";
@@ -48,7 +60,7 @@ main > div {{
   padding: 8px;
 }}
 
-/* --- NEW STYLES FOR TEXT COLOR --- */
+/* --- STYLES FOR TEXT COLOR --- */
 
 /* Target all headers (h1, h2, h3) */
 h1, h2, h3 {{
@@ -163,7 +175,7 @@ def get_draft_df():
 
 def write_pick(player, song):
     """Writes a new pick to the draft board for the specified player."""
-    normalized_song = ALIAS_MAP.get(song.strip().lower(), song)
+    normalized_song = ALIAS_MAP.get(song.strip().lower(), song.strip().lower())
     try:
         cell = draft_ws.find(player)
         row_num = cell.row
@@ -297,7 +309,20 @@ with tab1:
         st.subheader("Make Your Pick")
         players = initial_order
         player = st.selectbox("Who are you?", players, key="draft_player")
-        choice = st.selectbox("Pick a song:", fetch_catalog()["Song"], key="draft_song")
+
+        # --- NEW: Filter out drafted songs ---
+        full_catalog_df = fetch_catalog()
+        drafted_songs_series = get_draft_df().iloc[:, 1:].values.flatten()
+        drafted_songs_set = {str(song).strip().lower() for song in drafted_songs_series if pd.notna(song) and str(song).strip()}
+        
+        full_catalog_df['normalized'] = full_catalog_df['Song'].apply(
+            lambda s: ALIAS_MAP.get(s.strip().lower(), s.strip().lower())
+        )
+        available_songs_df = full_catalog_df[~full_catalog_df['normalized'].isin(drafted_songs_set)]
+        
+        choice = st.selectbox("Pick a song:", available_songs_df["Song"], key="draft_song")
+        # --- End of new logic ---
+
         if st.button("🏷️ Draft This Song"):
             if player == pick_on:
                 if write_pick(player, choice):
