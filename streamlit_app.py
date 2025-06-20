@@ -5,6 +5,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import math
 import datetime
+import re
 
 # -----------------------------------------------------------------------------
 # PAGE CONFIGURATION (must be the first Streamlit command)
@@ -16,7 +17,7 @@ st.set_page_config(page_title="Barnswallow Invitational", layout="wide")
 # -----------------------------------------------------------------------------
 # Define different background images for desktop and mobile
 desktop_bg_url = "https://i.imgur.com/eBrepb7.png"
-mobile_bg_url = "https://i.imgur.com/ZobK8r1.png" # A more vertically-friendly image
+mobile_bg_url = "https://i.imgur.com/M7cM42v.jpeg" # A more vertically-friendly image
 
 # Background image and overlay to improve readability
 st.markdown(f"""
@@ -255,9 +256,11 @@ def score_show(show_date, return_breakdown=False):
         st.error(f"Could not retrieve data from Phish.in for {show_date}. Error: {e}")
         return ({}, {}) if return_breakdown else {}
 
-    payload = r.json()
-    tracks = payload.get("data", {}).get("tracks", [])
+    payload = r.json().get("data", {})
+    tracks = payload.get("tracks", [])
+    show_notes = payload.get("show_notes", "")
 
+    # Points for songs played
     played_song_points = {}
     for t in tracks:
         title = t["title"].strip()
@@ -267,10 +270,27 @@ def score_show(show_date, return_breakdown=False):
         dur_min = t.get("duration", 0) / 1000.0 / 60.0
         if 20 <= dur_min < 30: pts += 2
         elif dur_min >= 30: pts += 3
-        # is_bust logic can be added here if available in API
         
-        played_song_points[key] = pts
+        is_reprise = any(tag.get("name", "").lower() == "reprise" for tag in t.get("tags", []))
+        if is_reprise:
+            pts += 2 # Award 2 points for a reprise
+            
+        played_song_points[key] = played_song_points.get(key, 0) + pts
 
+    # Points for teases
+    teased_song_points = {}
+    if show_notes:
+        board = get_draft_df()
+        all_drafted_songs = set(board.iloc[:, 1:].values.flatten())
+        
+        for song in all_drafted_songs:
+            if pd.notna(song) and str(song).strip():
+                # Use regex to find whole word matches to avoid partial matches (e.g., "sand" in "sandwiches")
+                if re.search(r'\b' + re.escape(song) + r'\b', show_notes, re.IGNORECASE):
+                    normalized_song = ALIAS_MAP.get(song.lower(), song.lower())
+                    teased_song_points[normalized_song] = 1
+
+    # Combine all points
     board = get_draft_df()
     player_totals = {p: 0 for p in board["Player"]}
     player_breakdown = {p: {} for p in board["Player"]}
@@ -280,12 +300,21 @@ def score_show(show_date, return_breakdown=False):
         for pick in row[1:]:
             if isinstance(pick, str) and pick.strip():
                 pick_key = ALIAS_MAP.get(pick.lower(), pick.lower())
-                points_for_pick = played_song_points.get(pick_key, 0)
-                if points_for_pick > 0:
-                    player_totals[player_name] += points_for_pick
-                    player_breakdown[player_name][pick] = points_for_pick
-    
+                
+                # Add points for played songs
+                points_for_play = played_song_points.get(pick_key, 0)
+                if points_for_play > 0:
+                    player_totals[player_name] += points_for_play
+                    player_breakdown[player_name][pick] = player_breakdown[player_name].get(pick, 0) + points_for_play
+                
+                # Add points for teased songs
+                points_for_tease = teased_song_points.get(pick_key, 0)
+                if points_for_tease > 0:
+                    player_totals[player_name] += points_for_tease
+                    player_breakdown[player_name][f"{pick} (Tease)"] = player_breakdown[player_name].get(f"{pick} (Tease)", 0) + points_for_tease
+
     return (player_breakdown, player_totals) if return_breakdown else player_totals
+
 
 # --- Initial Data Load ---
 initial_order = get_draft_order()
@@ -310,7 +339,7 @@ with tab1:
         players = initial_order
         player = st.selectbox("Who are you?", players, key="draft_player")
 
-        # --- NEW: Filter out drafted songs ---
+        # Filter out drafted songs
         full_catalog_df = fetch_catalog()
         drafted_songs_series = get_draft_df().iloc[:, 1:].values.flatten()
         drafted_songs_set = {str(song).strip().lower() for song in drafted_songs_series if pd.notna(song) and str(song).strip()}
@@ -321,7 +350,6 @@ with tab1:
         available_songs_df = full_catalog_df[~full_catalog_df['normalized'].isin(drafted_songs_set)]
         
         choice = st.selectbox("Pick a song:", available_songs_df["Song"], key="draft_song")
-        # --- End of new logic ---
 
         if st.button("🏷️ Draft This Song"):
             if player == pick_on:
