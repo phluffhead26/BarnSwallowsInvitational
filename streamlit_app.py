@@ -257,15 +257,17 @@ def score_show(show_date, draft_board, return_breakdown=False):
         st.error(f"Could not retrieve data from Phish.in for {show_date}. Error: {e}")
         return ({}, {}) if return_breakdown else {}
 
-    payload = r.json().get("data", {})
+    # CORRECTED: The API response is the payload itself, not nested under "data"
+    payload = r.json() 
 
-    # NEW: Check for empty data from the API and inform the user
+    # CORRECTED: Check for empty data from the API and inform the user
     if not isinstance(payload, dict) or not payload.get("tracks"):
         st.warning(f"No setlist data found on Phish.in for {show_date}. The API data is empty for this date.")
         return ({}, {}) if return_breakdown else {}
 
     tracks = payload.get("tracks", [])
-    show_notes = payload.get("show_notes", "")
+    # CORRECTED: Tease info is often in 'taper_notes' not 'show_notes'
+    show_notes = payload.get("taper_notes", "") 
 
     played_song_points = {}
     for t in tracks:
