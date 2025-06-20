@@ -270,25 +270,28 @@ def score_show(show_date, draft_board, return_breakdown=False):
     # Step 1: Create a list of all possible scoring events from the show's data.
     point_events = []
     songs_played_this_show = set() 
+    reprise_counters = {} # To create unique labels for multiple reprises
     for track in tracks:
         # --- Event: Song Play / Reprise ---
         played_title = track["title"].strip()
         played_key = ALIAS_MAP.get(played_title.lower(), played_title.lower())
         
-        # Build the detailed label for the event
         duration_ms = track.get("duration", 0)
         duration_min = round(duration_ms / 60000)
-        label = f"{played_title} ({duration_min} min)"
 
         if played_key not in songs_played_this_show:
             pts = 4
             if 20 <= duration_min < 30: pts += 2
             elif duration_min >= 30: pts += 3
+            label = f"{played_title} ({duration_min} min)"
             point_events.append({'key': played_key, 'points': pts, 'label': label})
             songs_played_this_show.add(played_key)
         else:
             # Subsequent play is a reprise
-            point_events.append({'key': played_key, 'points': 2, 'label': f"{played_title} (Reprise)"})
+            reprise_count = reprise_counters.get(played_key, 0) + 1
+            reprise_counters[played_key] = reprise_count
+            label = f"{played_title} (Reprise #{reprise_count})"
+            point_events.append({'key': played_key, 'points': 2, 'label': label})
         
         # --- Event: Tease ---
         for tag in track.get("tags", []):
@@ -296,7 +299,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
                 tease_note = tag["notes"].strip()
                 teased_title = tease_note.split(" by ")[0].strip()
                 teased_key = ALIAS_MAP.get(teased_title.lower(), teased_title.lower())
-                # Add context to the tease label
                 tease_label = f"{teased_title} (Tease in {played_title})"
                 point_events.append({'key': teased_key, 'points': 1, 'label': tease_label})
 
