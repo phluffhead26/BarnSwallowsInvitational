@@ -271,9 +271,7 @@ def score_show(show_date, return_breakdown=False):
         if 20 <= dur_min < 30: pts += 2
         elif dur_min >= 30: pts += 3
         
-        is_reprise = any(tag.get("name", "").lower() == "reprise" for tag in t.get("tags", []))
-        if is_reprise:
-            pts += 2 # Award 2 points for a reprise
+        # Reprise bonus points logic removed to treat songs like "Tweezer Reprise" as distinct entities
             
         played_song_points[key] = played_song_points.get(key, 0) + pts
 
@@ -370,9 +368,23 @@ with tab1:
 with tab2:
     st.header("Score a Show")
     today = datetime.date.today()
-    show_date = st.date_input("Select a show date to score", today)
+    # Set a wide date range to allow scoring of historical shows
+    first_phish_show = datetime.date(1983, 12, 2)
+    
+    # Use a key to ensure the state is handled correctly on reruns
+    st.date_input(
+        "Select a show date to score",
+        value=today,
+        min_value=first_phish_show,
+        max_value=today,
+        key="score_date" # Added a unique key
+    )
+
     if st.button("Calculate Scores"):
+        # Use the key to access the correct value from the session state
+        show_date = st.session_state.score_date
         date_str = show_date.strftime("%Y-%m-%d")
+        
         breakdown, totals = score_show(date_str, return_breakdown=True)
         append_scores(date_str, totals)
         
