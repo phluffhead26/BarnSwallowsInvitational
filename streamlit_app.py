@@ -32,11 +32,11 @@ st.markdown(f"""
 }}
 
 /* Mobile Background - applied only for screens 768px or less */
-@media (max-width: 768px) {{
+@media only screen and (max-width: 768px) {{
   .stApp {{
-    background-image: url('{mobile_bg_url}');
+    background-image: url('{mobile_bg_url}') !important;
     /* 'fixed' attachment can be buggy on mobile, so we override it */
-    background-attachment: scroll; 
+    background-attachment: scroll !important; 
   }}
 }}
 
