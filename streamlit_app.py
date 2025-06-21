@@ -17,7 +17,7 @@ st.set_page_config(page_title="Barnswallow Invitational", layout="wide")
 # -----------------------------------------------------------------------------
 # Define different background images for desktop and mobile
 desktop_bg_url = "https://i.imgur.com/eBrepb7.png"
-mobile_bg_url = "https://i.imgur.com/M7cM42v.jpeg" # A more vertically-friendly image
+mobile_bg_url = "https://i.imgur.com/ZobK8r1.png" # A more vertically-friendly image
 
 # Background image and overlay to improve readability
 st.markdown(f"""
