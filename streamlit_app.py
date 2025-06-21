@@ -35,6 +35,8 @@ st.markdown(f"""
 @media (max-width: 768px) {{
   .stApp {{
     background-image: url('{mobile_bg_url}');
+    /* 'fixed' attachment can be buggy on mobile, so we override it */
+    background-attachment: scroll; 
   }}
 }}
 
