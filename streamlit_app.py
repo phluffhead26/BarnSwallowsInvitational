@@ -331,6 +331,7 @@ def score_show(show_date, draft_board, return_breakdown=False):
         track_info = {'title': track_title, 'duration_min': duration_min, 'events': []}
 
         for event in point_events:
+            # CORRECTED: Only add events that are for this specific track
             if event.get('track_title') == track_title:
                 if event['key'] in draft_map:
                     for player in draft_map[event['key']]:
@@ -401,6 +402,7 @@ with tab1: # STANDINGS TAB
 
                 for set_name, tracks_in_set in setlist_data.items():
                     st.subheader(set_name)
+                    # Use a dictionary to avoid duplicate track titles
                     processed_tracks = {}
                     for track in tracks_in_set:
                         title = track['title']
