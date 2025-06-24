@@ -211,9 +211,9 @@ def append_scores(date_str, scores, status_placeholder):
         status_placeholder.info(f"Updating existing scores for {date_str}...")
         # Get row numbers to delete
         rows_to_delete = [cell.row for cell in existing_cells]
-        # Delete rows in reverse order to avoid shifting indices
-        for row_num in sorted(rows_to_delete, reverse=True):
-            ws.delete_rows(row_num)
+        # gspread batch delete is more efficient
+        if rows_to_delete:
+            ws.delete_rows(rows_to_delete[0], rows_to_delete[-1])
 
     # Append the new scores
     rows_to_add = []
@@ -221,7 +221,7 @@ def append_scores(date_str, scores, status_placeholder):
         rows_to_add.append([date_str, player, points])
     
     if rows_to_add:
-        ws.append_rows(rows_to_add)
+        ws.append_rows(rows_to_add, value_input_option='USER_ENTERED')
         status_placeholder.success(f"Scores for {date_str} have been successfully recorded!")
 
 
