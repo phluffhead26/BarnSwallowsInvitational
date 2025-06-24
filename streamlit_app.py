@@ -277,39 +277,9 @@ def score_show(show_date, draft_board, return_breakdown=False):
 
     tracks = payload.get("tracks", [])
     
-    point_events = []
-    songs_played_this_show = set() 
-    reprise_counters = {}
-    for track in tracks:
-        played_title = track["title"].strip()
-        played_key = ALIAS_MAP.get(played_title.lower(), played_title.lower())
-        
-        if played_key not in songs_played_this_show:
-            point_events.append({'key': played_key, 'points': 4, 'label': 'Song Played', 'track_title': played_title})
-            duration_ms = track.get("duration", 0)
-            duration_min = round(duration_ms / 60000)
-            if 20 <= duration_min < 30: 
-                point_events.append({'key': played_key, 'points': 2, 'label': f'Duration Bonus ({duration_min} min)', 'track_title': played_title})
-            elif duration_min >= 30: 
-                point_events.append({'key': played_key, 'points': 3, 'label': f'Duration Bonus ({duration_min} min)', 'track_title': played_title})
-            songs_played_this_show.add(played_key)
-        else:
-            reprise_count = reprise_counters.get(played_key, 0) + 1
-            reprise_counters[played_key] = reprise_count
-            label = f"Reprise #{reprise_count}"
-            point_events.append({'key': played_key, 'points': 2, 'label': label, 'track_title': played_title})
-        
-        for tag in track.get("tags", []):
-            if tag.get("name", "").lower() == "tease" and tag.get("notes"):
-                tease_note = tag["notes"].strip()
-                teased_title = tease_note.split(" by ")[0].strip()
-                teased_key = ALIAS_MAP.get(teased_title.lower(), teased_title.lower())
-                tease_label = f"Tease in {played_title}"
-                point_events.append({'key': teased_key, 'points': 1, 'label': tease_label, 'track_title': played_title})
+    # --- REFACTORED SCORING LOGIC FOR ACCURACY ---
 
-    player_totals = {p: 0 for p in draft_board["Player"]}
-    player_breakdown = {p: {} for p in draft_board["Player"]}
-    
+    # Create a mapping of drafted songs to players for efficient lookup
     draft_map = {}
     for _, row in draft_board.iterrows():
         player_name = row["Player"]
@@ -320,35 +290,72 @@ def score_show(show_date, draft_board, return_breakdown=False):
                     draft_map[pick_key] = []
                 draft_map[pick_key].append(player_name)
 
+    player_totals = {p: 0 for p in draft_board["Player"]}
+    player_breakdown = {p: {} for p in draft_board["Player"]}
     setlist_breakdown = {}
+    songs_played_this_show = set()
+    reprise_counters = {}
+
     for track in tracks:
         set_name = track.get("set_name", "Unknown Set")
         if set_name not in setlist_breakdown:
             setlist_breakdown[set_name] = []
         
-        track_title = track['title'].strip()
+        played_title = track["title"].strip()
+        played_key = ALIAS_MAP.get(played_title.lower(), played_title.lower())
         duration_min = round(track.get("duration", 0) / 60000)
-        track_info = {'title': track_title, 'duration_min': duration_min, 'events': []}
+        
+        track_info = {'title': played_title, 'duration_min': duration_min, 'events': []}
 
-        for event in point_events:
-            # CORRECTED: Only add events that are for this specific track
-            if event.get('track_title') == track_title:
-                if event['key'] in draft_map:
-                    for player in draft_map[event['key']]:
-                        track_info['events'].append({
-                            'player': player,
-                            'points': event['points'],
-                            'reason': event['label']
-                        })
+        # --- Event: Song Play / Reprise ---
+        if played_key not in songs_played_this_show:
+            pts = 4
+            if played_key in draft_map:
+                for player in draft_map[played_key]:
+                    player_totals[player] += pts
+                    track_info['events'].append({'player': player, 'reason': 'Song Played', 'points': pts})
+            songs_played_this_show.add(played_key)
+            # Duration Bonus
+            if 20 <= duration_min < 30:
+                pts_bonus = 2
+                if played_key in draft_map:
+                    for player in draft_map[played_key]:
+                        player_totals[player] += pts_bonus
+                        track_info['events'].append({'player': player, 'reason': f'Duration Bonus ({duration_min} min)', 'points': pts_bonus})
+            elif duration_min >= 30:
+                pts_bonus = 3
+                if played_key in draft_map:
+                    for player in draft_map[played_key]:
+                        player_totals[player] += pts_bonus
+                        track_info['events'].append({'player': player, 'reason': f'Duration Bonus ({duration_min} min)', 'points': pts_bonus})
+        else:
+            # It's a reprise
+            reprise_count = reprise_counters.get(played_key, 0) + 1
+            reprise_counters[played_key] = reprise_count
+            pts_reprise = 2
+            if played_key in draft_map:
+                 for player in draft_map[played_key]:
+                    player_totals[player] += pts_reprise
+                    track_info['events'].append({'player': player, 'reason': f'Reprise #{reprise_count}', 'points': pts_reprise})
+
+        # --- Event: Tease ---
+        for tag in track.get("tags", []):
+            if tag.get("name", "").lower() == "tease" and tag.get("notes"):
+                tease_note = tag["notes"].strip()
+                teased_title = tease_note.split(" by ")[0].strip()
+                teased_key = ALIAS_MAP.get(teased_title.lower(), teased_title.lower())
+                if teased_key in draft_map:
+                    for player in draft_map[teased_key]:
+                        player_totals[player] += 1
+                        track_info['events'].append({'player': player, 'reason': f'Tease of {teased_title}', 'points': 1})
+        
         setlist_breakdown[set_name].append(track_info)
 
-    # Tally player points here to avoid double counting
-    for event in point_events:
-        if event['key'] in draft_map:
-            for player in draft_map[event['key']]:
-                player_totals[player] += event['points']
-                player_breakdown[player][event['label']] = player_breakdown.get(player, {}).get(event['label'], 0) + event['points']
-        
+    # Simplified player_breakdown for the other tab
+    for player, total in player_totals.items():
+        if total > 0:
+            player_breakdown[player] = {'Total Points': total}
+
     return (player_breakdown, player_totals, setlist_breakdown) if return_breakdown else ({}, {}, {})
 
 
@@ -402,28 +409,11 @@ with tab1: # STANDINGS TAB
 
                 for set_name, tracks_in_set in setlist_data.items():
                     st.subheader(set_name)
-                    # Use a dictionary to avoid duplicate track titles
-                    processed_tracks = {}
                     for track in tracks_in_set:
-                        title = track['title']
-                        if title not in processed_tracks:
-                            processed_tracks[title] = track
-                        else:
-                            processed_tracks[title]['events'].extend(track['events'])
-
-                    for title, info in processed_tracks.items():
-                        st.markdown(f"**{title} ({info['duration_min']} min)**")
-                        if info['events']:
-                            # Consolidate events by player and reason to avoid duplicates
-                            player_events = {}
-                            for event in info['events']:
-                                key = (event['player'], event['reason'])
-                                if key not in player_events:
-                                    player_events[key] = 0
-                                player_events[key] += event['points']
-                            
-                            for (player, reason), points in player_events.items():
-                                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **{player}**: {reason} **(+{points})**")
+                        st.markdown(f"**{track['title']} ({track['duration_min']} min)**")
+                        if track['events']:
+                            for event in track['events']:
+                                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **{event['player']}**: {event['reason']} **(+{event['points']})**")
                         else:
                             st.markdown("&nbsp;&nbsp;&nbsp;&nbsp;↳ _No points scored_")
 
@@ -498,7 +488,7 @@ with tab3: # SCORE A SHOW TAB
             scores_df = scores_df.sort_values('Points', ascending=False)
             st.dataframe(scores_df)
 
-            st.subheader("Scoring Breakdown")
+            st.subheader("Player Scoring Breakdown")
             if not any(v for v in breakdown.values() if v):
                 st.write("No drafted songs were played or teased in this show.")
             else:
