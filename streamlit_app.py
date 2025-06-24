@@ -339,17 +339,15 @@ def score_show(show_date, draft_board, return_breakdown=False):
                             'points': event['points'],
                             'reason': event['label']
                         })
-        # Tally player points here to avoid double counting
-        for player_name in player_totals.keys():
-            player_breakdown[player_name] = {}
+        setlist_breakdown[set_name].append(track_info)
+
+    # Tally player points here to avoid double counting
     for event in point_events:
         if event['key'] in draft_map:
             for player in draft_map[event['key']]:
                 player_totals[player] += event['points']
-                player_breakdown[player][event['label']] = event['points']
+                player_breakdown[player][event['label']] = player_breakdown.get(player, {}).get(event['label'], 0) + event['points']
         
-        setlist_breakdown[set_name].append(track_info)
-
     return (player_breakdown, player_totals, setlist_breakdown) if return_breakdown else ({}, {}, {})
 
 
@@ -401,23 +399,31 @@ with tab1: # STANDINGS TAB
                 # Get the detailed breakdown
                 _, _, setlist_data = score_show(latest_date_str, draft_df, return_breakdown=True)
 
-                for set_name, tracks in setlist_data.items():
+                for set_name, tracks_in_set in setlist_data.items():
                     st.subheader(set_name)
-                    # Use a dictionary to avoid duplicate track titles
                     processed_tracks = {}
-                    for track in tracks:
-                        if track['title'] not in processed_tracks:
-                            processed_tracks[track['title']] = {'duration_min': track['duration_min'], 'events': []}
-                        processed_tracks[track['title']]['events'].extend(track['events'])
-                    
+                    for track in tracks_in_set:
+                        title = track['title']
+                        if title not in processed_tracks:
+                            processed_tracks[title] = track
+                        else:
+                            processed_tracks[title]['events'].extend(track['events'])
+
                     for title, info in processed_tracks.items():
                         st.markdown(f"**{title} ({info['duration_min']} min)**")
                         if info['events']:
+                            # Consolidate events by player and reason to avoid duplicates
+                            player_events = {}
                             for event in info['events']:
-                                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **{event['player']}**: {event['reason']} **(+{event['points']})**")
+                                key = (event['player'], event['reason'])
+                                if key not in player_events:
+                                    player_events[key] = 0
+                                player_events[key] += event['points']
+                            
+                            for (player, reason), points in player_events.items():
+                                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **{player}**: {reason} **(+{points})**")
                         else:
                             st.markdown("&nbsp;&nbsp;&nbsp;&nbsp;↳ _No points scored_")
-
 
     except gspread.exceptions.WorksheetNotFound:
         st.info("The 'Scores' worksheet has not been created yet. Score a show to begin.")
