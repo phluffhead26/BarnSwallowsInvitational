@@ -197,20 +197,32 @@ def write_pick(player, song):
         st.error(f"Player '{player}' not found on the draft board.")
         return False
 
-def append_scores(date, scores):
-    """Appends scores for a given date to the 'Scores' worksheet."""
+def append_scores(date_str, scores, status_placeholder):
+    """Appends scores for a given date, replacing old scores if they exist."""
     try:
         ws = spreadsheet.worksheet("Scores")
     except gspread.exceptions.WorksheetNotFound:
         ws = spreadsheet.add_worksheet("Scores", rows=100, cols=3)
         ws.append_row(["Show Date", "Player", "Points"])
 
+    # Check if scores for this date already exist
+    existing_cells = ws.findall(date_str, in_column=1)
+    if existing_cells:
+        status_placeholder.info(f"Updating existing scores for {date_str}...")
+        # Get row numbers to delete
+        rows_to_delete = [cell.row for cell in existing_cells]
+        # Delete rows in reverse order to avoid shifting indices
+        for row_num in sorted(rows_to_delete, reverse=True):
+            ws.delete_rows(row_num)
+
+    # Append the new scores
     rows_to_add = []
     for player, points in scores.items():
-        rows_to_add.append([date, player, points])
+        rows_to_add.append([date_str, player, points])
     
     if rows_to_add:
         ws.append_rows(rows_to_add)
+        status_placeholder.success(f"Scores for {date_str} have been successfully recorded!")
 
 
 # -----------------------------------------------------------------------------
@@ -384,6 +396,9 @@ with tab2:
         max_value=today,
         key="score_date"
     )
+    
+    # Placeholder for status messages
+    status_placeholder = st.empty()
 
     if st.button("Calculate Scores"):
         show_date = st.session_state.score_date
@@ -393,7 +408,8 @@ with tab2:
         
         # Only append scores if the scoring function returned data
         if totals:
-            append_scores(date_str, totals)
+            append_scores(date_str, totals, status_placeholder)
+            
             st.subheader(f"Scores for {date_str}")
             scores_df = pd.DataFrame.from_dict(totals, orient='index', columns=['Points'])
             scores_df = scores_df.sort_values('Points', ascending=False)
