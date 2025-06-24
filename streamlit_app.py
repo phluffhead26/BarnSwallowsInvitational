@@ -268,25 +268,20 @@ def score_show(show_date, draft_board, return_breakdown=False):
         r = requests.get(f"{PHISH_IN_BASE}/shows/{show_date}")
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
-        st.error(f"Could not retrieve data from Phish.in for {show_date}. Error: {e}")
-        return ({}, {}) if return_breakdown else {}
+        return ({}, {}, {}) if return_breakdown else {}
 
     payload = r.json() 
 
     if not isinstance(payload, dict) or not payload.get("tracks"):
-        st.warning(f"No setlist data found on Phish.in for {show_date}. The API data is empty for this date.")
-        return ({}, {}) if return_breakdown else {}
+        return ({}, {}, {}) if return_breakdown else {}
 
     tracks = payload.get("tracks", [])
     
     # --- SCORING LOGIC REBUILT FOR ACCURACY AND DETAIL ---
-
-    # Step 1: Create a list of all possible scoring events from the show's data.
     point_events = []
     songs_played_this_show = set() 
-    reprise_counters = {} # To create unique labels for multiple reprises
+    reprise_counters = {}
     for track in tracks:
-        # --- Event: Song Play / Reprise ---
         played_title = track["title"].strip()
         played_key = ALIAS_MAP.get(played_title.lower(), played_title.lower())
         
@@ -298,40 +293,60 @@ def score_show(show_date, draft_board, return_breakdown=False):
             if 20 <= duration_min < 30: pts += 2
             elif duration_min >= 30: pts += 3
             label = f"{played_title} ({duration_min} min)"
-            point_events.append({'key': played_key, 'points': pts, 'label': label})
+            point_events.append({'key': played_key, 'points': pts, 'label': label, 'track_title': played_title})
             songs_played_this_show.add(played_key)
         else:
-            # Subsequent play is a reprise
             reprise_count = reprise_counters.get(played_key, 0) + 1
             reprise_counters[played_key] = reprise_count
             label = f"{played_title} (Reprise #{reprise_count})"
-            point_events.append({'key': played_key, 'points': 2, 'label': label})
+            point_events.append({'key': played_key, 'points': 2, 'label': label, 'track_title': played_title})
         
-        # --- Event: Tease ---
         for tag in track.get("tags", []):
             if tag.get("name", "").lower() == "tease" and tag.get("notes"):
                 tease_note = tag["notes"].strip()
                 teased_title = tease_note.split(" by ")[0].strip()
                 teased_key = ALIAS_MAP.get(teased_title.lower(), teased_title.lower())
                 tease_label = f"{teased_title} (Tease in {played_title})"
-                point_events.append({'key': teased_key, 'points': 1, 'label': tease_label})
+                point_events.append({'key': teased_key, 'points': 1, 'label': tease_label, 'track_title': played_title})
 
-    # Step 2: Tally points for each player by checking their picks against the events.
     player_totals = {p: 0 for p in draft_board["Player"]}
     player_breakdown = {p: {} for p in draft_board["Player"]}
-
+    
+    draft_map = {}
     for _, row in draft_board.iterrows():
         player_name = row["Player"]
         for pick in row[1:]:
             if isinstance(pick, str) and pick.strip():
                 pick_key = ALIAS_MAP.get(pick.lower(), pick.lower())
-                
-                for event in point_events:
-                    if event['key'] == pick_key:
-                        player_totals[player_name] += event['points']
-                        player_breakdown[player_name][event['label']] = player_breakdown[player_name].get(event['label'], 0) + event['points']
+                if pick_key not in draft_map:
+                    draft_map[pick_key] = []
+                draft_map[pick_key].append(player_name)
 
-    return (player_breakdown, player_totals) if return_breakdown else player_totals
+    setlist_breakdown = {}
+    for track in tracks:
+        set_name = track.get("set_name", "Unknown Set")
+        if set_name not in setlist_breakdown:
+            setlist_breakdown[set_name] = []
+        
+        track_title = track['title'].strip()
+        track_info = {'title': track_title, 'events': []}
+
+        for event in point_events:
+            if event.get('track_title') == track_title:
+                if event['key'] in draft_map:
+                    for player in draft_map[event['key']]:
+                        track_info['events'].append({
+                            'player': player,
+                            'points': event['points'],
+                            'reason': event['label']
+                        })
+                        player_totals[player] += event['points']
+                        player_breakdown[player][event['label']] = event['points']
+        
+        setlist_breakdown[set_name].append(track_info)
+
+
+    return (player_breakdown, player_totals, setlist_breakdown) if return_breakdown else ({}, {}, {})
 
 
 # --- Initial Data Load ---
@@ -345,9 +360,60 @@ pick_on, pick_num = next_pick_player(initial_order, total_picks)
 # -----------------------------------------------------------------------------
 st.title("Barnswallow Invitational")
 
-tab1, tab2, tab3 = st.tabs(["🏟️ Draft", "🎯 Score a Show", "🏆 Standings"])
+# NEW TAB ORDER
+tab1, tab2, tab3 = st.tabs(["🏆 Standings", "🏟️ Draft", "🎯 Score a Show"])
 
-with tab1:
+with tab1: # STANDINGS TAB
+    st.header("🏆 Overall Standings")
+    
+    try:
+        scores_ws = spreadsheet.worksheet("Scores")
+        records = scores_ws.get_all_records()
+        
+        if not records or len(records) <= 1:
+            st.info("No shows have been scored yet.")
+        else:
+            scores_df = pd.DataFrame(records[1:], columns=records[0])
+            scores_df['Points'] = pd.to_numeric(scores_df['Points'])
+            scores_df['Show Date'] = pd.to_datetime(scores_df['Show Date']).dt.date
+            
+            tour_scores_df = scores_df[scores_df['Show Date'] >= TOUR_START_DATE].copy()
+
+            if tour_scores_df.empty:
+                st.info(f"No official tour shows have been scored yet (since {TOUR_START_DATE.strftime('%Y-%m-%d')}).")
+            else:
+                standings = tour_scores_df.groupby('Player')['Points'].sum().sort_values(ascending=False).reset_index()
+                standings.index = standings.index + 1
+                
+                st.dataframe(standings, use_container_width=True)
+
+                st.divider()
+                st.header("Most Recent Show Breakdown")
+                
+                latest_date = tour_scores_df['Show Date'].max()
+                latest_date_str = latest_date.strftime('%Y-%m-%d')
+                st.subheader(f"Show Date: {latest_date_str}")
+                
+                # Get the detailed breakdown
+                _, _, setlist_data = score_show(latest_date_str, draft_df, return_breakdown=True)
+
+                for set_name, tracks in setlist_data.items():
+                    st.subheader(set_name)
+                    for track in tracks:
+                        st.markdown(f"**{track['title']}**")
+                        if track['events']:
+                            for event in track['events']:
+                                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **{event['player']}**: {event['reason']} **(+{event['points']})**")
+                        else:
+                            st.markdown("&nbsp;&nbsp;&nbsp;&nbsp;↳ _No points scored_")
+
+
+    except gspread.exceptions.WorksheetNotFound:
+        st.info("The 'Scores' worksheet has not been created yet. Score a show to begin.")
+    except Exception as e:
+        st.error(f"An error occurred while calculating standings: {e}")
+
+with tab2: # DRAFT TAB
     st.header("Draft & Catalog")
     st.info(f"⏰ Pick #{pick_num}: **{pick_on}** is on the clock!")
     
@@ -384,7 +450,7 @@ with tab1:
     with st.expander("Full Song Catalog"):
         st.dataframe(fetch_catalog(), use_container_width=True)
 
-with tab2:
+with tab3: # SCORE A SHOW TAB
     st.header("Score a Show")
     today = datetime.date.today()
     first_phish_show = datetime.date(1983, 12, 2)
@@ -397,16 +463,14 @@ with tab2:
         key="score_date"
     )
     
-    # Placeholder for status messages
     status_placeholder = st.empty()
 
     if st.button("Calculate Scores"):
         show_date = st.session_state.score_date
         date_str = show_date.strftime("%Y-%m-%d")
         
-        breakdown, totals = score_show(date_str, draft_df, return_breakdown=True)
+        breakdown, totals, _ = score_show(date_str, draft_df, return_breakdown=True)
         
-        # Only append scores if the scoring function returned data
         if totals:
             append_scores(date_str, totals, status_placeholder)
             
@@ -424,34 +488,3 @@ with tab2:
                         st.write(f"**{player}**")
                         for song_label, points in songs.items():
                             st.write(f"- {song_label}: {points} pts")
-
-
-with tab3:
-    st.header("🏆 Overall Standings")
-    
-    try:
-        scores_ws = spreadsheet.worksheet("Scores")
-        records = scores_ws.get_all_records()
-        
-        if not records or len(records) <= 1:
-            st.info("No shows have been scored yet.")
-        else:
-            scores_df = pd.DataFrame(records[1:], columns=records[0])
-            scores_df['Points'] = pd.to_numeric(scores_df['Points'])
-            scores_df['Show Date'] = pd.to_datetime(scores_df['Show Date']).dt.date
-            
-            tour_scores_df = scores_df[scores_df['Show Date'] >= TOUR_START_DATE].copy()
-
-            if tour_scores_df.empty:
-                st.info(f"No official tour shows have been scored yet (since {TOUR_START_DATE.strftime('%Y-%m-%d')}).")
-            else:
-                standings = tour_scores_df.groupby('Player')['Points'].sum().sort_values(ascending=False).reset_index()
-                standings.index = standings.index + 1
-                
-                st.write(f"Standings for all shows since {TOUR_START_DATE.strftime('%Y-%m-%d')}")
-                st.dataframe(standings, use_container_width=True)
-
-    except gspread.exceptions.WorksheetNotFound:
-        st.info("The 'Scores' worksheet has not been created yet. Score a show to begin.")
-    except Exception as e:
-        st.error(f"An error occurred while calculating standings: {e}")
