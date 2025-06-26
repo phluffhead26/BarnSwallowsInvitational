@@ -364,25 +364,21 @@ def score_show(show_date, draft_board, return_breakdown=False):
 def generate_narrative(rank, player, data):
     """Generates a dynamic narrative for a player's power ranking."""
     
-    # Opening statements
     openers = [
         f"Sitting at #{rank}, **{player}** is looking like a strong contender.",
         f"Coming in at number {rank}, **{player}** has built a solid foundation.",
         f"At rank #{rank}, **{player}** is a team to watch closely.",
     ]
     
-    # Mid-section based on score vs potential
     middles = {
         "high_score": f"Their current score of {data['Current Score']} is impressive, showing their picks have paid off early.",
         "low_score": f"While their current score of {data['Current Score']} is modest, their true strength lies in what's to come.",
         "balanced": f"With a healthy score of {data['Current Score']} and significant potential, they are well-balanced for the long haul."
     }
     
-    # Closing statements about potential
     closers = {
-        "has_bustouts": f"The real excitement comes from their high-risk, high-reward picks like **{random.choice(data['Bustout Candidates'])}**, making them a threat for massive point swings.",
+        "has_bustouts": "The real excitement comes from their high-risk, high-reward picks like **{bustout_song}**, making them a threat for massive point swings.",
         "no_bustouts": "Their strategy of picking reliable, frequently played songs could provide a steady stream of points throughout the tour.",
-        "general_potential": "With an average gap of {avg_gap:.0f} shows for their remaining picks, they have a great chance to rack up points with some less common songs."
     }
 
     narrative = random.choice(openers) + " "
@@ -397,9 +393,11 @@ def generate_narrative(rank, player, data):
     narrative += " "
 
     if data["Bustout Candidates"]:
-        narrative += closers['has_bustouts']
+        # CORRECTED: Only try to choose a song if the list is not empty
+        bustout_song = random.choice(data['Bustout Candidates'])
+        narrative += closers['has_bustouts'].format(bustout_song=bustout_song)
     else:
-        narrative += closers['no_bustouts'].format(avg_gap=data['Average Gap'])
+        narrative += closers['no_bustouts']
         
     return narrative
 
@@ -426,7 +424,6 @@ def calculate_power_rankings(draft_df, catalog_df, standings_df):
         
         avg_gap = total_gap / unplayed_count if unplayed_count > 0 else 0
         current_score = standings_df[standings_df["Player"] == player]["Points"].sum()
-        # Corrected Formula: Current score + a small bonus for average gap
         power_score = current_score + (avg_gap * 0.1) 
         
         player_data[player] = {
@@ -436,7 +433,6 @@ def calculate_power_rankings(draft_df, catalog_df, standings_df):
             "Average Gap": avg_gap
         }
 
-    # Generate narrative explanations after all data is collected
     ranked_players = sorted(player_data.items(), key=lambda item: item[1]["Power Score"], reverse=True)
     
     for i, (player, data) in enumerate(ranked_players):
