@@ -338,9 +338,12 @@ def score_show(show_date, draft_board, return_breakdown=False):
                     player_totals[player] += pts_reprise
                     track_info['events'].append({'player': player, 'reason': f'Reprise #{reprise_count}', 'points': pts_reprise})
 
-        # --- Event: Tease ---
+        # --- Event Processing from Tags ---
         for tag in track.get("tags", []):
-            if tag.get("name", "").lower() == "tease" and tag.get("notes"):
+            tag_name = tag.get("name", "").lower()
+            
+            # Event: Tease
+            if tag_name == "tease" and tag.get("notes"):
                 tease_note = tag["notes"].strip()
                 teased_title = tease_note.split(" by ")[0].strip()
                 teased_key = ALIAS_MAP.get(teased_title.lower(), teased_title.lower())
@@ -348,6 +351,13 @@ def score_show(show_date, draft_board, return_breakdown=False):
                     for player in draft_map[teased_key]:
                         player_totals[player] += 1
                         track_info['events'].append({'player': player, 'reason': f'Tease of {teased_title}', 'points': 1})
+
+            # Event: Bust Out
+            if tag_name == "bustout":
+                if played_key in draft_map:
+                    for player in draft_map[played_key]:
+                        player_totals[player] += 10
+                        track_info['events'].append({'player': player, 'reason': 'Bust Out!', 'points': 10})
         
         setlist_breakdown[set_name].append(track_info)
 
