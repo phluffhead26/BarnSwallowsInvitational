@@ -6,6 +6,7 @@ from google.oauth2.service_account import Credentials
 import math
 import datetime
 import re
+import random
 
 # -----------------------------------------------------------------------------
 # PAGE CONFIGURATION (must be the first Streamlit command)
@@ -167,7 +168,10 @@ def fetch_catalog():
             "Shows Since Last Played": s.get("gap", ""),
             "Last Played": s.get("last_played", "")
         })
-    return pd.DataFrame(rows).sort_values("Song")
+    # Ensure 'Shows Since Last Played' is numeric for calculations
+    df = pd.DataFrame(rows)
+    df['Shows Since Last Played'] = pd.to_numeric(df['Shows Since Last Played'], errors='coerce').fillna(0)
+    return df.sort_values("Song")
 
 @st.cache_data(ttl=60) # Cache the draft board for 60 seconds to reduce API calls
 def get_draft_df():
@@ -277,8 +281,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
 
     tracks = payload.get("tracks", [])
     
-    # --- REFACTORED SCORING LOGIC FOR ACCURACY ---
-
     # Create a mapping of drafted songs to players for efficient lookup
     draft_map = {}
     for _, row in draft_board.iterrows():
@@ -329,7 +331,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
                         player_totals[player] += pts_bonus
                         track_info['events'].append({'player': player, 'reason': f'Duration Bonus ({duration_min} min)', 'points': pts_bonus})
         else:
-            # It's a reprise
             reprise_count = reprise_counters.get(played_key, 0) + 1
             reprise_counters[played_key] = reprise_count
             pts_reprise = 2
@@ -341,8 +342,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
         # --- Event Processing from Tags ---
         for tag in track.get("tags", []):
             tag_name = tag.get("name", "").lower()
-            
-            # Event: Tease
             if tag_name == "tease" and tag.get("notes"):
                 tease_note = tag["notes"].strip()
                 teased_title = tease_note.split(" by ")[0].strip()
@@ -351,8 +350,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
                     for player in draft_map[teased_key]:
                         player_totals[player] += 1
                         track_info['events'].append({'player': player, 'reason': f'Tease of {teased_title}', 'points': 1})
-
-            # Event: Bust Out
             if tag_name == "bustout":
                 pts_bustout = 10
                 if played_key in draft_map:
@@ -362,7 +359,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
         
         setlist_breakdown[set_name].append(track_info)
         
-    # Create the simplified player breakdown for the scoring tab
     for player, total in player_totals.items():
         if total > 0:
             player_breakdown[player] = {'Total Points': f'{total} pts'}
@@ -370,9 +366,67 @@ def score_show(show_date, draft_board, return_breakdown=False):
     return (player_breakdown, player_totals, setlist_breakdown) if return_breakdown else ({}, {}, {})
 
 
+# --- POWER RANKINGS & PREDICTION FUNCTIONS ---
+
+def calculate_power_rankings(draft_df, catalog_df, standings_df):
+    """Calculates power rankings and generates a narrative explanation."""
+    
+    player_data = {}
+    for _, row in draft_df.iterrows():
+        player = row["Player"]
+        potential = 0
+        bustout_picks = []
+        for pick in row[1:]:
+            if isinstance(pick, str) and pick.strip():
+                song_info = catalog_df[catalog_df["Song"] == pick]
+                if not song_info.empty:
+                    gap = song_info.iloc[0]["Shows Since Last Played"]
+                    if isinstance(gap, (int, float)):
+                        potential += gap
+                        if gap > 100:
+                            bustout_picks.append(f"{pick} ({int(gap)} shows)")
+        
+        current_score = standings_df[standings_df["Player"] == player]["Points"].sum()
+        power_score = (current_score * 0.7) + (potential * 0.03) # Adjusted potential weight
+        
+        player_data[player] = {
+            "Power Score": round(power_score, 2),
+            "Bustout Candidates": bustout_picks,
+            "Current Score": current_score
+        }
+
+    # Generate narrative explanations
+    ranked_players = sorted(player_data.items(), key=lambda item: item[1]["Power Score"], reverse=True)
+    
+    narratives = {}
+    for i, (player, data) in enumerate(ranked_players[:5]):
+        rank = i + 1
+        narrative = f"**{rank}. {player}:** Currently sitting at {data['Current Score']} points, {player} is in a strong position. "
+        if data["Bustout Candidates"]:
+            narrative += f"Their biggest strength lies in their high-risk, high-reward picks like {', '.join(data['Bustout Candidates'][:2])}, making them a serious contender for big point swings if these rarities appear."
+        else:
+            narrative += "They have built a solid foundation with consistent, popular song choices. Look for them to maintain a steady pace throughout the tour."
+        narratives[player] = narrative
+        data['Narrative'] = narrative
+
+    return pd.DataFrame([data for _, data in player_data.items()], index=player_data.keys()).sort_values("Power Score", ascending=False)
+
+
+def predict_setlist(catalog_df, drafted_songs):
+    """Generates a speculative setlist prediction for the next show."""
+    likely_candidates = catalog_df[catalog_df["Shows Since Last Played"] > 10].copy()
+    set1 = likely_candidates.nlargest(7, "Shows Since Last Played")["Song"].tolist()
+    set2 = likely_candidates.nlargest(12, "Shows Since Last Played").tail(5)["Song"].tolist()
+    encore = likely_candidates.nlargest(14, "Shows Since Last Played").tail(2)["Song"].tolist()
+    
+    prediction = {"Set 1": set1, "Set 2": set2, "Encore": encore}
+    return prediction
+
+
 # --- Initial Data Load ---
 initial_order = get_draft_order()
 draft_df = get_draft_df()
+full_catalog = fetch_catalog()
 total_picks = sum(draft_df.iloc[:, 1:].ne("").sum())
 pick_on, pick_num = next_pick_player(initial_order, total_picks)
 
@@ -382,7 +436,7 @@ pick_on, pick_num = next_pick_player(initial_order, total_picks)
 st.title("Barnswallow Invitational")
 
 # NEW TAB ORDER
-tab1, tab2, tab3 = st.tabs(["🏆 Standings", "🏟️ Draft", "🎯 Score a Show"])
+tab1, tab2, tab3, tab4 = st.tabs(["🏆 Standings", "⚡️ Power Rankings", "🏟️ Draft", "🎯 Score a Show"])
 
 with tab1: # STANDINGS TAB
     st.header("🏆 Overall Standings")
@@ -415,25 +469,57 @@ with tab1: # STANDINGS TAB
                 latest_date_str = latest_date.strftime('%Y-%m-%d')
                 st.subheader(f"Show Date: {latest_date_str}")
                 
-                # Get the detailed breakdown
                 _, _, setlist_data = score_show(latest_date_str, draft_df, return_breakdown=True)
 
                 for set_name, tracks_in_set in setlist_data.items():
-                    st.subheader(set_name)
-                    for track in tracks_in_set:
-                        st.markdown(f"**{track['title']} ({track['duration_min']} min)**")
-                        if track['events']:
-                            for event in track['events']:
-                                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **{event['player']}**: {event['reason']} **(+{event['points']})**")
-                        else:
-                            st.markdown("&nbsp;&nbsp;&nbsp;&nbsp;↳ _No points scored_")
+                    with st.expander(f"**{set_name}**"):
+                        for track in tracks_in_set:
+                            st.markdown(f"**{track['title']} ({track['duration_min']} min)**")
+                            if track['events']:
+                                for event in track['events']:
+                                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;↳ **{event['player']}**: {event['reason']} **(+{event['points']})**")
+                            else:
+                                st.markdown("&nbsp;&nbsp;&nbsp;&nbsp;↳ _No points scored_")
 
     except gspread.exceptions.WorksheetNotFound:
         st.info("The 'Scores' worksheet has not been created yet. Score a show to begin.")
     except Exception as e:
         st.error(f"An error occurred while calculating standings: {e}")
 
-with tab2: # DRAFT TAB
+with tab2: # POWER RANKINGS TAB
+    st.header("⚡️ Power Rankings")
+    try:
+        scores_ws = spreadsheet.worksheet("Scores")
+        records = scores_ws.get_all_records()
+        if not records or len(records) <= 1:
+            st.info("Score at least one show to generate Power Rankings.")
+        else:
+            scores_df = pd.DataFrame(records[1:], columns=records[0])
+            scores_df['Points'] = pd.to_numeric(scores_df['Points'])
+            standings_for_power = scores_df.groupby('Player')['Points'].sum().reset_index()
+            
+            power_rankings_df = calculate_power_rankings(draft_df, full_catalog, standings_for_power)
+            st.dataframe(power_rankings_df[['Power Score']], use_container_width=True)
+            st.divider()
+            
+            for index, row in power_rankings_df.head(5).iterrows():
+                st.write(row["Narrative"])
+                st.write("---")
+            
+            st.divider()
+            with st.expander("🔮 Next Show Prediction (For Fun!)"):
+                drafted_songs = set(draft_df.iloc[:, 1:].values.flatten())
+                prediction = predict_setlist(full_catalog, drafted_songs)
+                for set_name, songs in prediction.items():
+                    st.subheader(set_name)
+                    for song in songs:
+                        st.markdown(f"- {song} (~{random.randint(5,15)} min)")
+    except gspread.exceptions.WorksheetNotFound:
+        st.info("Score at least one show to generate Power Rankings.")
+    except Exception as e:
+        st.error(f"An error occurred while generating power rankings: {e}")
+
+with tab3: # DRAFT TAB
     st.header("Draft & Catalog")
     st.info(f"⏰ Pick #{pick_num}: **{pick_on}** is on the clock!")
     
@@ -470,7 +556,7 @@ with tab2: # DRAFT TAB
     with st.expander("Full Song Catalog"):
         st.dataframe(fetch_catalog(), use_container_width=True)
 
-with tab3: # SCORE A SHOW TAB
+with tab4: # SCORE A SHOW TAB
     st.header("Score a Show")
     today = datetime.date.today()
     first_phish_show = datetime.date(1983, 12, 2)
