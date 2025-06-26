@@ -424,7 +424,6 @@ def calculate_power_rankings(draft_df, catalog_df, standings_df):
         
         avg_gap = total_gap / unplayed_count if unplayed_count > 0 else 0
         current_score = standings_df[standings_df["Player"] == player]["Points"].sum()
-        # Corrected Formula: Current score + a small bonus for average gap
         power_score = current_score + (avg_gap * 0.1) 
         
         player_data[player] = {
@@ -445,10 +444,12 @@ def calculate_power_rankings(draft_df, catalog_df, standings_df):
 
 def predict_setlist(catalog_df):
     """Generates a speculative setlist prediction for the next show."""
-    # Filter for Phish originals only
+    # CORRECTED: Filter for Phish originals only
     phish_originals = catalog_df[catalog_df['Artist'].isnull() | (catalog_df['Artist'] == 'Phish')].copy()
     
-    # Simple prediction based on gap size for likely candidates
+    if phish_originals.empty:
+        return {"Error": ["Could not fetch Phish original songs for prediction."]}
+
     likely_candidates = phish_originals[phish_originals["Shows Since Last Played"] > 10].copy()
     
     # Get common jam vehicles and openers
@@ -464,14 +465,17 @@ def predict_setlist(catalog_df):
     set1.append(random.choice(openers))
 
     # Fill Set 1
-    set1.extend(likely_candidates.nlargest(6, "Shows Since Last Played")["Song"].tolist())
+    if not likely_candidates.empty:
+        set1.extend(likely_candidates.nlargest(6, "Shows Since Last Played")["Song"].tolist())
     
     # Fill Set 2 with a jam vehicle
     set2.append(random.choice(jam_vehicles))
-    set2.extend(likely_candidates.nlargest(10, "Shows Since Last Played").tail(4)["Song"].tolist())
+    if not likely_candidates.empty:
+        set2.extend(likely_candidates.nlargest(10, "Shows Since Last Played").tail(4)["Song"].tolist())
     
     # Pick an encore
-    encore.extend(likely_candidates.nlargest(15, "Shows Since Last Played").tail(2)["Song"].tolist())
+    if not likely_candidates.empty:
+        encore.extend(likely_candidates.nlargest(15, "Shows Since Last Played").tail(2)["Song"].tolist())
     
     prediction = {"Set 1": set1, "Set 2": set2, "Encore": encore}
     return prediction
