@@ -564,6 +564,9 @@ with tab2: # POWER RANKINGS TAB
             power_rankings_df = calculate_power_rankings(draft_df, full_catalog, standings_for_power)
             
             st.subheader("Top 5 Power Rankings")
+            st.dataframe(power_rankings_df[['Power Score']].head(5)) # Display the table
+            st.divider()
+
             for index, row in power_rankings_df.head(5).iterrows():
                 st.markdown(row["Narrative"])
                 st.caption(f"Power Score: {row['Power Score']}")
