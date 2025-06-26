@@ -313,6 +313,7 @@ def score_show(show_date, draft_board, return_breakdown=False):
             if played_key in draft_map:
                 for player in draft_map[played_key]:
                     player_totals[player] += pts
+                    player_breakdown[player]['Song Played'] = player_breakdown[player].get('Song Played', 0) + pts
                     track_info['events'].append({'player': player, 'reason': 'Song Played', 'points': pts})
             songs_played_this_show.add(played_key)
             # Duration Bonus
@@ -321,12 +322,14 @@ def score_show(show_date, draft_board, return_breakdown=False):
                 if played_key in draft_map:
                     for player in draft_map[played_key]:
                         player_totals[player] += pts_bonus
+                        player_breakdown[player][f'Duration Bonus ({duration_min} min)'] = player_breakdown[player].get(f'Duration Bonus ({duration_min} min)', 0) + pts_bonus
                         track_info['events'].append({'player': player, 'reason': f'Duration Bonus ({duration_min} min)', 'points': pts_bonus})
             elif duration_min >= 30:
                 pts_bonus = 3
                 if played_key in draft_map:
                     for player in draft_map[played_key]:
                         player_totals[player] += pts_bonus
+                        player_breakdown[player][f'Duration Bonus ({duration_min} min)'] = player_breakdown[player].get(f'Duration Bonus ({duration_min} min)', 0) + pts_bonus
                         track_info['events'].append({'player': player, 'reason': f'Duration Bonus ({duration_min} min)', 'points': pts_bonus})
         else:
             # It's a reprise
@@ -336,6 +339,7 @@ def score_show(show_date, draft_board, return_breakdown=False):
             if played_key in draft_map:
                  for player in draft_map[played_key]:
                     player_totals[player] += pts_reprise
+                    player_breakdown[player][f'Reprise #{reprise_count}'] = player_breakdown[player].get(f'Reprise #{reprise_count}', 0) + pts_reprise
                     track_info['events'].append({'player': player, 'reason': f'Reprise #{reprise_count}', 'points': pts_reprise})
 
         # --- Event Processing from Tags ---
@@ -350,22 +354,20 @@ def score_show(show_date, draft_board, return_breakdown=False):
                 if teased_key in draft_map:
                     for player in draft_map[teased_key]:
                         player_totals[player] += 1
+                        player_breakdown[player][f'Tease of {teased_title}'] = player_breakdown[player].get(f'Tease of {teased_title}', 0) + 1
                         track_info['events'].append({'player': player, 'reason': f'Tease of {teased_title}', 'points': 1})
 
             # Event: Bust Out
             if tag_name == "bustout":
+                pts_bustout = 10
                 if played_key in draft_map:
                     for player in draft_map[played_key]:
-                        player_totals[player] += 10
+                        player_totals[player] += pts_bustout
+                        player_breakdown[player]['Bust Out!'] = player_breakdown[player].get('Bust Out!', 0) + pts_bustout
                         track_info['events'].append({'player': player, 'reason': 'Bust Out!', 'points': 10})
         
         setlist_breakdown[set_name].append(track_info)
-
-    # Simplified player_breakdown for the other tab
-    for player, total in player_totals.items():
-        if total > 0:
-            player_breakdown[player] = {'Total Points': total}
-
+        
     return (player_breakdown, player_totals, setlist_breakdown) if return_breakdown else ({}, {}, {})
 
 
