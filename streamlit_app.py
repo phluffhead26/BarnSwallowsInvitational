@@ -281,7 +281,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
 
     tracks = payload.get("tracks", [])
     
-    # Create a mapping of drafted songs to players for efficient lookup
     draft_map = {}
     for _, row in draft_board.iterrows():
         player_name = row["Player"]
@@ -293,7 +292,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
                 draft_map[pick_key].append(player_name)
 
     player_totals = {p: 0 for p in draft_board["Player"]}
-    player_breakdown = {p: {} for p in draft_board["Player"]}
     setlist_breakdown = {}
     songs_played_this_show = set()
     reprise_counters = {}
@@ -309,7 +307,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
         
         track_info = {'title': played_title, 'duration_min': duration_min, 'events': []}
 
-        # --- Event: Song Play / Reprise ---
         if played_key not in songs_played_this_show:
             pts = 4
             if played_key in draft_map:
@@ -317,7 +314,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
                     player_totals[player] += pts
                     track_info['events'].append({'player': player, 'reason': 'Song Played', 'points': pts})
             songs_played_this_show.add(played_key)
-            # Duration Bonus
             if 20 <= duration_min < 30:
                 pts_bonus = 2
                 if played_key in draft_map:
@@ -339,7 +335,6 @@ def score_show(show_date, draft_board, return_breakdown=False):
                     player_totals[player] += pts_reprise
                     track_info['events'].append({'player': player, 'reason': f'Reprise #{reprise_count}', 'points': pts_reprise})
 
-        # --- Event Processing from Tags ---
         for tag in track.get("tags", []):
             tag_name = tag.get("name", "").lower()
             if tag_name == "tease" and tag.get("notes"):
@@ -359,55 +354,95 @@ def score_show(show_date, draft_board, return_breakdown=False):
         
         setlist_breakdown[set_name].append(track_info)
         
-    for player, total in player_totals.items():
-        if total > 0:
-            player_breakdown[player] = {'Total Points': f'{total} pts'}
+    player_breakdown = {player: {'Total Points': total} for player, total in player_totals.items() if total > 0}
         
     return (player_breakdown, player_totals, setlist_breakdown) if return_breakdown else ({}, {}, {})
 
 
 # --- POWER RANKINGS & PREDICTION FUNCTIONS ---
 
+def generate_narrative(rank, player, data):
+    """Generates a dynamic narrative for a player's power ranking."""
+    
+    # Opening statements
+    openers = [
+        f"Sitting at #{rank}, **{player}** is looking like a strong contender.",
+        f"Coming in at number {rank}, **{player}** has built a solid foundation.",
+        f"At rank #{rank}, **{player}** is a team to watch closely.",
+    ]
+    
+    # Mid-section based on score vs potential
+    middles = {
+        "high_score": f"Their current score of {data['Current Score']} is impressive, showing their picks have paid off early.",
+        "low_score": f"While their current score of {data['Current Score']} is modest, their true strength lies in what's to come.",
+        "balanced": f"With a healthy score of {data['Current Score']} and significant potential, they are well-balanced for the long haul."
+    }
+    
+    # Closing statements about potential
+    closers = {
+        "has_bustouts": f"The real excitement comes from their high-risk, high-reward picks like **{random.choice(data['Bustout Candidates'])}**, making them a threat for massive point swings.",
+        "no_bustouts": "Their strategy of picking reliable, frequently played songs could provide a steady stream of points throughout the tour.",
+        "general_potential": "With an average gap of {avg_gap:.0f} shows for their remaining picks, they have a great chance to rack up points with some less common songs."
+    }
+
+    narrative = random.choice(openers) + " "
+
+    if data['Current Score'] > 50:
+        narrative += middles['high_score']
+    elif data['Current Score'] < 20:
+        narrative += middles['low_score']
+    else:
+        narrative += middles['balanced']
+        
+    narrative += " "
+
+    if data["Bustout Candidates"]:
+        narrative += closers['has_bustouts']
+    else:
+        narrative += closers['no_bustouts'].format(avg_gap=data['Average Gap'])
+        
+    return narrative
+
 def calculate_power_rankings(draft_df, catalog_df, standings_df):
     """Calculates power rankings and generates a narrative explanation."""
     
     player_data = {}
+    played_songs = set(standings_df["Show Date"].unique()) # Simplified for now
+
     for _, row in draft_df.iterrows():
         player = row["Player"]
-        potential = 0
+        total_gap = 0
+        unplayed_count = 0
         bustout_picks = []
+        
         for pick in row[1:]:
             if isinstance(pick, str) and pick.strip():
                 song_info = catalog_df[catalog_df["Song"] == pick]
                 if not song_info.empty:
                     gap = song_info.iloc[0]["Shows Since Last Played"]
-                    if isinstance(gap, (int, float)):
-                        potential += gap
-                        if gap > 100:
-                            bustout_picks.append(f"{pick} ({int(gap)} shows)")
+                    total_gap += gap
+                    unplayed_count += 1
+                    if gap > 100:
+                        bustout_picks.append(f"{pick}")
         
+        avg_gap = total_gap / unplayed_count if unplayed_count > 0 else 0
         current_score = standings_df[standings_df["Player"] == player]["Points"].sum()
-        power_score = (current_score * 0.7) + (potential * 0.03) # Adjusted potential weight
+        # Corrected Formula: Current score + a small bonus for average gap
+        power_score = current_score + (avg_gap * 0.1) 
         
         player_data[player] = {
             "Power Score": round(power_score, 2),
             "Bustout Candidates": bustout_picks,
-            "Current Score": current_score
+            "Current Score": current_score,
+            "Average Gap": avg_gap
         }
 
-    # Generate narrative explanations
+    # Generate narrative explanations after all data is collected
     ranked_players = sorted(player_data.items(), key=lambda item: item[1]["Power Score"], reverse=True)
     
-    narratives = {}
-    for i, (player, data) in enumerate(ranked_players[:5]):
+    for i, (player, data) in enumerate(ranked_players):
         rank = i + 1
-        narrative = f"**{rank}. {player}:** Currently sitting at {data['Current Score']} points, {player} is in a strong position. "
-        if data["Bustout Candidates"]:
-            narrative += f"Their biggest strength lies in their high-risk, high-reward picks like {', '.join(data['Bustout Candidates'][:2])}, making them a serious contender for big point swings if these rarities appear."
-        else:
-            narrative += "They have built a solid foundation with consistent, popular song choices. Look for them to maintain a steady pace throughout the tour."
-        narratives[player] = narrative
-        data['Narrative'] = narrative
+        data['Narrative'] = generate_narrative(rank, player, data)
 
     return pd.DataFrame([data for _, data in player_data.items()], index=player_data.keys()).sort_values("Power Score", ascending=False)
 
@@ -488,6 +523,15 @@ with tab1: # STANDINGS TAB
 
 with tab2: # POWER RANKINGS TAB
     st.header("⚡️ Power Rankings")
+    with st.expander("How are Power Rankings Calculated?"):
+        st.markdown("""
+        The Power Score is a blend of past performance and future potential. It's calculated using the following formula:
+        
+        `Power Score = (Current Total Points) + (Average Song Gap * 0.1)`
+        
+        A higher "Average Song Gap" means a player has drafted more songs that haven't been played in a long time, giving them greater "bust-out potential" for future shows.
+        """)
+
     try:
         scores_ws = spreadsheet.worksheet("Scores")
         records = scores_ws.get_all_records()
@@ -499,11 +543,11 @@ with tab2: # POWER RANKINGS TAB
             standings_for_power = scores_df.groupby('Player')['Points'].sum().reset_index()
             
             power_rankings_df = calculate_power_rankings(draft_df, full_catalog, standings_for_power)
-            st.dataframe(power_rankings_df[['Power Score']], use_container_width=True)
-            st.divider()
             
+            st.subheader("Top 5 Power Rankings")
             for index, row in power_rankings_df.head(5).iterrows():
-                st.write(row["Narrative"])
+                st.markdown(row["Narrative"])
+                st.caption(f"Power Score: {row['Power Score']}")
                 st.write("---")
             
             st.divider()
