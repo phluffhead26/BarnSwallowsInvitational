@@ -407,7 +407,6 @@ def calculate_power_rankings(draft_df, catalog_df, standings_df):
     """Calculates power rankings and generates a narrative explanation."""
     
     player_data = {}
-    played_songs = set(standings_df["Show Date"].unique()) # Simplified for now
 
     for _, row in draft_df.iterrows():
         player = row["Player"]
