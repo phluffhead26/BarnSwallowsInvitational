@@ -166,7 +166,8 @@ def fetch_catalog():
             "Times Played": s.get("times_played", s.get("plays", 0)),
             "Debut Date": s.get("debut", ""),
             "Shows Since Last Played": s.get("gap", ""),
-            "Last Played": s.get("last_played", "")
+            "Last Played": s.get("last_played", ""),
+            "Artist": s.get("artist") # Fetch artist to identify originals
         })
     # Ensure 'Shows Since Last Played' is numeric for calculations
     df = pd.DataFrame(rows)
@@ -359,7 +360,7 @@ def score_show(show_date, draft_board, return_breakdown=False):
     return (player_breakdown, player_totals, setlist_breakdown) if return_breakdown else ({}, {}, {})
 
 
-# --- POWER RANKINGS & PREDICTION FUNCTIONS ---
+# --- POWER RANKINGS & PREDICTION FUNCTIONS (REVISED) ---
 
 def generate_narrative(rank, player, data):
     """Generates a dynamic narrative for a player's power ranking."""
@@ -393,7 +394,6 @@ def generate_narrative(rank, player, data):
     narrative += " "
 
     if data["Bustout Candidates"]:
-        # CORRECTED: Only try to choose a song if the list is not empty
         bustout_song = random.choice(data['Bustout Candidates'])
         narrative += closers['has_bustouts'].format(bustout_song=bustout_song)
     else:
@@ -424,6 +424,7 @@ def calculate_power_rankings(draft_df, catalog_df, standings_df):
         
         avg_gap = total_gap / unplayed_count if unplayed_count > 0 else 0
         current_score = standings_df[standings_df["Player"] == player]["Points"].sum()
+        # Corrected Formula: Current score + a small bonus for average gap
         power_score = current_score + (avg_gap * 0.1) 
         
         player_data[player] = {
@@ -442,12 +443,35 @@ def calculate_power_rankings(draft_df, catalog_df, standings_df):
     return pd.DataFrame([data for _, data in player_data.items()], index=player_data.keys()).sort_values("Power Score", ascending=False)
 
 
-def predict_setlist(catalog_df, drafted_songs):
+def predict_setlist(catalog_df):
     """Generates a speculative setlist prediction for the next show."""
-    likely_candidates = catalog_df[catalog_df["Shows Since Last Played"] > 10].copy()
-    set1 = likely_candidates.nlargest(7, "Shows Since Last Played")["Song"].tolist()
-    set2 = likely_candidates.nlargest(12, "Shows Since Last Played").tail(5)["Song"].tolist()
-    encore = likely_candidates.nlargest(14, "Shows Since Last Played").tail(2)["Song"].tolist()
+    # Filter for Phish originals only
+    phish_originals = catalog_df[catalog_df['Artist'].isnull() | (catalog_df['Artist'] == 'Phish')].copy()
+    
+    # Simple prediction based on gap size for likely candidates
+    likely_candidates = phish_originals[phish_originals["Shows Since Last Played"] > 10].copy()
+    
+    # Get common jam vehicles and openers
+    jam_vehicles = ["Tweezer", "Carini", "Chalk Dust Torture", "Simple", "Down with Disease"]
+    openers = ["AC/DC Bag", "Buried Alive", "The Moma Dance", "Free", "First Tube"]
+
+    # Build the prediction
+    set1 = []
+    set2 = []
+    encore = []
+
+    # Pick a random opener
+    set1.append(random.choice(openers))
+
+    # Fill Set 1
+    set1.extend(likely_candidates.nlargest(6, "Shows Since Last Played")["Song"].tolist())
+    
+    # Fill Set 2 with a jam vehicle
+    set2.append(random.choice(jam_vehicles))
+    set2.extend(likely_candidates.nlargest(10, "Shows Since Last Played").tail(4)["Song"].tolist())
+    
+    # Pick an encore
+    encore.extend(likely_candidates.nlargest(15, "Shows Since Last Played").tail(2)["Song"].tolist())
     
     prediction = {"Set 1": set1, "Set 2": set2, "Encore": encore}
     return prediction
@@ -547,8 +571,7 @@ with tab2: # POWER RANKINGS TAB
             
             st.divider()
             with st.expander("🔮 Next Show Prediction (For Fun!)"):
-                drafted_songs = set(draft_df.iloc[:, 1:].values.flatten())
-                prediction = predict_setlist(full_catalog, drafted_songs)
+                prediction = predict_setlist(full_catalog)
                 for set_name, songs in prediction.items():
                     st.subheader(set_name)
                     for song in songs:
